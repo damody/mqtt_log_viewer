@@ -183,12 +183,6 @@ impl App {
                     break;
                 }
                 
-                // 檢測 'Q' 鍵 (VK code 81)
-                if self.is_key_just_pressed(81) {
-                    std::fs::write("debug_key.txt", "Q key detected via WinAPI!").ok();
-                    tracing::info!("Q key detected via Windows API");
-                    break;
-                }
                 
                 // 檢測上下箭頭鍵進行導航
                 if self.is_key_just_pressed(0x26) { // VK_UP
@@ -331,12 +325,6 @@ impl App {
                     break;
                 }
                 
-                // 檢測 'Q' 鍵 (VK code 81)
-                if self.is_key_just_pressed(81) {
-                    std::fs::write("debug_key.txt", "Q key detected via WinAPI!").ok();
-                    tracing::info!("Q key detected via Windows API");
-                    break;
-                }
                 
                 // 檢測上下箭頭鍵進行導航
                 if self.is_key_just_pressed(0x26) { // VK_UP
@@ -500,6 +488,12 @@ impl App {
         
         tracing::debug!("Handling topic list event: {:?}", event);
         match event {
+            AppEvent::Tab => {
+                tracing::debug!("Tab pressed in topic list - switching filter focus");
+                self.filter_state.next_field();
+                self.filter_state.is_editing = true;
+                tracing::debug!("Auto-started editing after Tab in topic list");
+            },
             AppEvent::NavigateUp => {
                 tracing::debug!("Navigate up - topics count: {}, selected_index: {}", 
                                self.topic_list_state.topics.len(), self.topic_list_state.selected_index);
@@ -697,6 +691,10 @@ impl App {
             }
             AppEvent::Backspace => {
                 self.filter_state.get_active_field_value_mut().pop();
+            }
+            AppEvent::Tab => {
+                tracing::debug!("Tab pressed in filter edit mode - switching to next field");
+                self.filter_state.next_field();
             }
             AppEvent::NavigateRight => {
                 self.filter_state.next_field();
@@ -1187,7 +1185,12 @@ impl App {
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←][ESC]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [h]elp"))?;
+        stdout.queue(Print("[←][ESC]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [F1]help"))?;
+        
+        // Position cursor for input if editing
+        if let Some((col, row)) = self.message_list_state.get_cursor_position() {
+            stdout.queue(MoveTo(col, row))?;
+        }
         
         stdout.flush()?;
         info!("render_message_list() completed - MessageList UI should now be visible");

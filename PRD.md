@@ -117,7 +117,7 @@ Status: 1,234 topics | 45,678 messages | Last: 2024-01-20 10:30:03
 │          │                                                            │
 └───────────────────────────────────────────────────────────────────────┘
 Page 1/25 | 1,024 messages | Selected: sensors/temp
-[ESC]back [f]ilter [Enter]view [↑↓]navigate [j]son [h]elp
+[←][ESC]back [f]ilter [Enter]view [↑↓]navigate [PgUp/PgDn]page [j]son [h]elp
 ```
 
 **功能特性**:
@@ -126,7 +126,12 @@ Page 1/25 | 1,024 messages | Selected: sensors/temp
 - **額外過濾**:
   - Payload Filter: 針對該主題的 payload 進行額外過濾
   - Time Filter: 針對該主題的時間範圍進行額外過濾
-- **分頁顯示**: 每頁顯示 20 條訊息
+- **分頁顯示**: 每頁顯示 100 條訊息
+- **翻頁功能**:
+  - PageUp: 載入上一頁訊息（若有）
+  - PageDown: 載入下一頁訊息（若有）
+  - 翻頁時重置選中項為第一筆
+  - 自動檢測是否到達最後一頁
 - **Payload 簡化顯示**: 
   - JSON 格式: 只顯示第一層鍵名，如 `{"temperature","unit"}`
   - 非 JSON: 顯示前 50 字元，超出用 "..." 表示

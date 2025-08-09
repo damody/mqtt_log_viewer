@@ -40,7 +40,7 @@ impl Default for StatusBarState {
             total_messages: 0,
             last_update: None,
             current_view: ViewType::TopicList,
-            help_text: "[q]uit [f]ilter [Enter]select [↑↓]navigate [r]efresh [h]elp".to_string(),
+            help_text: "[/]filter [Enter]select [↑↓]navigate [F5]refresh [F1]help".to_string(),
         }
     }
 }
@@ -150,13 +150,13 @@ impl StatusBar {
         
         state.help_text = match view {
             ViewType::TopicList => {
-                "[q]uit [f]ilter [Enter]select [↑↓]navigate [←]back [r]efresh [h]elp".to_string()
+                "[/]filter [Enter]select [↑↓]navigate [←]back [F5]refresh [F1]help".to_string()
             }
             ViewType::MessageList(_) => {
-                "[←][ESC]back [f]ilter [Enter]view [↑↓]navigate [j]son [h]elp".to_string()
+                "[←][ESC]back [/]filter [Enter]view [↑↓]navigate [F2]json [F1]help".to_string()
             }
             ViewType::PayloadDetail(_, _) => {
-                "[←][ESC]back [j]son-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [h]elp".to_string()
+                "[←][ESC]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help".to_string()
             }
         };
     }

@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
         .open("mqtt_log_viewer.log")?;
     
     tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(Level::INFO)
         .with_writer(log_file)
         .with_ansi(false) // 移除顏色控制碼
         .init();

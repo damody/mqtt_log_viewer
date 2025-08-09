@@ -1,1 +1,1 @@
-Q key detected via WinAPI!
+ESC key detected via WinAPI!

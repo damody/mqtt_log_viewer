@@ -32,11 +32,10 @@ impl From<KeyEvent> for AppEvent {
         }
         
         match key_event.code {
-            KeyCode::Char('q') => AppEvent::Quit,
-            KeyCode::Char('r') => AppEvent::Refresh,
-            KeyCode::Char('f') => AppEvent::Filter,
-            KeyCode::Char('j') => AppEvent::JsonToggle,
-            KeyCode::Char('h') => AppEvent::Help,
+            KeyCode::F(5) => AppEvent::Refresh,
+            KeyCode::Char('/') => AppEvent::Filter,
+            KeyCode::F(2) => AppEvent::JsonToggle,
+            KeyCode::F(1) => AppEvent::Help,
             KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => AppEvent::Copy,
             KeyCode::Tab => AppEvent::Tab,
             KeyCode::Char(c) => AppEvent::Input(c),

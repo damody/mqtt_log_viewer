@@ -168,6 +168,31 @@ impl MessageListState {
     pub fn stop_editing(&mut self) {
         self.is_editing = false;
     }
+    
+    pub fn get_cursor_position(&self) -> Option<(u16, u16)> {
+        if !self.is_editing {
+            return None;
+        }
+        
+        let (field_row, field_col) = match self.focus {
+            FocusTarget::PayloadFilter => (1, 17), // "│ Payload Filter: [" = 17 chars
+            FocusTarget::TimeFilterFrom => (2, 13), // "│ Time: From [" = 13 chars  
+            FocusTarget::TimeFilterTo => {
+                let from_len = self.time_from_input.len().min(11);
+                (2, 13 + from_len as u16 + 6) // "│ Time: From [xxx] To [" = 13 + len + 6
+            },
+            FocusTarget::MessageList => return None, // No cursor for message list
+        };
+        
+        let cursor_offset = match self.focus {
+            FocusTarget::PayloadFilter => self.payload_filter_input.len().min(11) as u16,
+            FocusTarget::TimeFilterFrom => self.time_from_input.len().min(11) as u16,
+            FocusTarget::TimeFilterTo => self.time_to_input.len().min(11) as u16,
+            FocusTarget::MessageList => 0,
+        };
+        
+        Some((field_col + cursor_offset, field_row))
+    }
 }
 
 pub struct MessageListView;

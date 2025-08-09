@@ -23,7 +23,13 @@
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/temperature\" -m '{\"\"value\"\": 22.5, \"\"unit\"\": \"\"celsius\"\", \"\"timestamp\"\": \"\"2025-08-09T05:15:00Z\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"devices/status\" -m '{\"\"device_id\"\": \"\"dev001\"\", \"\"status\"\": \"\"online\"\", \"\"last_seen\"\": \"\"2025-08-09T05:15:30Z\"\"}')",
       "Bash(git add:*)",
-      "Bash(timeout 15 cargo run)"
+      "Bash(timeout 15 cargo run)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(timeout 20 cargo run)",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/input\" -m '{\"\"test\"\": \"\"input functionality\"\", \"\"chars\"\": \"\"frjh\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/input\" -m '{\"\"test\"\": \"\"input functionality\"\", \"\"chars\"\": \"\"qwerty\"\"}')"
     ],
     "deny": []
   }

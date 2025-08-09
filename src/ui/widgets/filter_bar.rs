@@ -229,10 +229,10 @@ impl FilterBar {
         }
         
         let (field_row, field_col) = match state.active_field {
-            FilterField::Topic => (row, 15), // "Topic Filter: [" = 15 chars
-            FilterField::Payload => (row + 1, 17), // "Payload Filter: [" = 17 chars
-            FilterField::StartTime => (row + 2, 11), // "Time: From [" = 12 chars
-            FilterField::EndTime => (row + 2, 11 + 14 + state.start_time.len().min(11) as u16), // After "From [xxx] To ["
+            FilterField::Topic => (row+2, 17), // "Topic Filter: [" = 17 chars
+            FilterField::Payload => (row + 3, 19), // "Payload Filter: [" = 19 chars
+            FilterField::StartTime => (row + 4, 14), // "Time: From [" = 11 chars
+            FilterField::EndTime => (row + 4, 17 + 14 + state.start_time.len().min(11) as u16), // After "From [xxx] To ["
         };
         
         let cursor_offset = state.get_active_field_value().len().min(11) as u16;
