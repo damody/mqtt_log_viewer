@@ -102,8 +102,74 @@ impl MessageRepository {
             sql.push_str(&format!(" OFFSET {}", offset));
         }
         
-        // For now, return empty vector - will implement proper querying later
-        Ok(Vec::new())
+        tracing::debug!("Executing SQL: {} with args: {:?}", sql, args);
+        
+        let result = self.rb.query(&sql, args).await?;
+        let mut messages = Vec::new();
+        
+        if let rbs::Value::Array(rows) = result {
+            for (idx, row_value) in rows.into_iter().enumerate() {
+                if let rbs::Value::Map(row) = row_value {
+                    // Debug: print all keys in the map
+                    if idx == 0 {
+                        tracing::debug!("First row keys: {:?}", row.0.keys().collect::<Vec<_>>());
+                    }
+                    
+                    let id_key = rbs::Value::String("id".to_string());
+                    let topic_key = rbs::Value::String("topic".to_string());
+                    let payload_key = rbs::Value::String("payload".to_string());
+                    let timestamp_key = rbs::Value::String("timestamp".to_string());
+                    let qos_key = rbs::Value::String("qos".to_string());
+                    let retain_key = rbs::Value::String("retain".to_string());
+                    
+                    // Debug: check what value we get for payload
+                    let payload_value = row.get(&payload_key);
+                    if idx == 0 {
+                        tracing::debug!("First row payload value type: {:?}", payload_value);
+                    }
+                    
+                    let id = row.get(&id_key).as_i64();
+                    let topic = row.get(&topic_key).as_str().unwrap_or("").to_string();
+                    
+                    // Handle payload - it might be a Map (JSON object) or a String
+                    let payload = match payload_value {
+                        rbs::Value::String(s) => s.clone(),
+                        rbs::Value::Map(_) | rbs::Value::Array(_) => {
+                            // Convert Map/Array back to JSON string
+                            serde_json::to_string(payload_value).unwrap_or_else(|_| "{}".to_string())
+                        }
+                        _ => payload_value.as_str().unwrap_or("").to_string()
+                    };
+                    let timestamp_str = row.get(&timestamp_key).as_str().unwrap_or("");
+                    let qos = row.get(&qos_key).as_i64().unwrap_or(0) as i32;
+                    let retain = row.get(&retain_key).as_bool().unwrap_or(false);
+                    
+                    // Debug logging
+                    if idx < 3 {
+                        tracing::debug!("Row {} data - topic: {}, payload: {}, timestamp: {}", idx, topic, payload, timestamp_str);
+                    }
+                    
+                    let timestamp = DateTime::parse_from_rfc3339(timestamp_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now());
+                    
+                    messages.push(Message {
+                        id,
+                        topic,
+                        payload,
+                        timestamp,
+                        qos,
+                        retain,
+                        created_at: None,
+                    });
+                }
+            }
+        } else {
+            tracing::warn!("Query result is not an array: {:?}", result);
+        }
+        
+        tracing::debug!("Retrieved {} messages", messages.len());
+        Ok(messages)
     }
     
     pub async fn get_topic_stats(&self, criteria: &FilterCriteria) -> Result<Vec<TopicStat>> {

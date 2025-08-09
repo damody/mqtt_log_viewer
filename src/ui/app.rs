@@ -23,7 +23,7 @@ use crate::db::{MessageRepository, FilterCriteria};
 use crate::ui::events::AppEvent;
 use crate::ui::widgets::{FilterState, FilterBar, StatusBarState, StatusBar, ViewType, ConnectionStatus};
 use crate::mqtt::MqttClient;
-use crate::ui::views::{TopicListState, TopicListView};
+use crate::ui::views::{TopicListState, TopicListView, MessageListState};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppState {
@@ -43,6 +43,7 @@ pub struct App {
     filter_state: FilterState,
     status_bar_state: StatusBarState,
     topic_list_state: TopicListState,
+    message_list_state: MessageListState,
     
     // MQTT connection info
     mqtt_host: String,
@@ -79,6 +80,7 @@ impl App {
             filter_state: FilterState::default(),
             status_bar_state: StatusBarState::default(),
             topic_list_state: TopicListState::default(),
+            message_list_state: MessageListState::new(),
             mqtt_host: config.mqtt.host.clone(),
             mqtt_port: config.mqtt.port,
             prev_filter_state: None,
@@ -453,11 +455,32 @@ impl App {
     
     async fn handle_message_list_event(&mut self, event: AppEvent) -> Result<()> {
         match event {
+            AppEvent::NavigateUp => {
+                tracing::debug!("Navigate up in message list");
+                self.message_list_state.move_up();
+            }
+            AppEvent::NavigateDown => {
+                tracing::debug!("Navigate down in message list");
+                self.message_list_state.move_down();
+            }
+            AppEvent::PageUp => {
+                self.message_list_state.page_up();
+            }
+            AppEvent::PageDown => {
+                self.message_list_state.page_down();
+            }
             AppEvent::NavigateLeft => {
                 tracing::debug!("Navigate left from message list - returning to topic list");
                 self.navigate_back()?;
             }
-            // TODO: Implement other message list navigation
+            AppEvent::NavigateRight | AppEvent::Enter => {
+                if let Some(_msg) = self.message_list_state.get_selected_message() {
+                    // Navigate to payload detail
+                    self.state = AppState::PayloadDetail;
+                    self.needs_full_redraw = true;
+                    // TODO: Set payload detail state
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -533,6 +556,11 @@ impl App {
             AppState::TopicList => {
                 if let Some(selected_topic) = self.topic_list_state.get_selected_topic() {
                     info!("Navigating to messages for topic: {}", selected_topic.topic);
+                    
+                    // Set topic and load messages
+                    self.message_list_state.set_topic(selected_topic.topic.clone());
+                    self.message_list_state.load_messages(&self.repository).await?;
+                    
                     self.state = AppState::MessageList;
                     self.needs_full_redraw = true; // 強制完全重繪
                     StatusBar::set_help_text_for_view(
@@ -543,7 +571,6 @@ impl App {
                     info!("About to call render() for MessageList state");
                     self.render()?;
                     info!("render() call completed for MessageList state");
-                    // TODO: Load messages for selected topic
                 } else {
                     tracing::debug!("No topic selected - topics list is empty");
                 }
@@ -823,23 +850,51 @@ impl App {
         let available_height = self.terminal_height.saturating_sub(content_start_row + status_rows + 1);
         
         // Render message list content
+        let messages = &self.message_list_state.messages;
+        let selected_index = self.message_list_state.selected_index;
+        
         for i in 0..available_height {
             let row = content_start_row + i as u16;
             stdout.queue(MoveTo(0, row))?;
             stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
             
-            stdout.queue(Print("│"))?;
+            stdout.queue(Print("│ "))?;
             
-            if i == available_height / 2 {
+            if let Some(msg) = messages.get(i as usize) {
+                // Highlight selected row
+                if i as usize == selected_index {
+                    stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+                    stdout.queue(Print("> "))?;
+                } else {
+                    stdout.queue(Print("  "))?;
+                }
+                
+                // Format timestamp (HH:MM:SS)
+                let time_str = msg.timestamp.format("%H:%M:%S").to_string();
+                stdout.queue(Print(&format!("{:<10}", time_str)))?;
+                stdout.queue(Print(" │ "))?;
+                
+                // Truncate payload if too long
+                let max_payload_width = terminal_width.saturating_sub(20);
+                let payload_display = if msg.payload.len() > max_payload_width {
+                    format!("{}...", &msg.payload[..max_payload_width.saturating_sub(3)])
+                } else {
+                    msg.payload.clone()
+                };
+                
+                stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
+                
+                if i as usize == selected_index {
+                    stdout.queue(ResetColor)?;
+                }
+            } else if messages.is_empty() && i == 0 {
                 stdout.queue(SetForegroundColor(crossterm::style::Color::DarkGrey))?;
-                let message = " Loading messages for this topic...";
-                let centered = (terminal_width.saturating_sub(message.len() as usize + 2)) / 2;
-                stdout.queue(Print(&format!("{:>width$}{}", "", message, width = centered)))?;
-                let padding = terminal_width.saturating_sub(message.len() + centered + 2);
-                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+                stdout.queue(Print("  No messages found for this topic"))?;
                 stdout.queue(ResetColor)?;
+                let padding = terminal_width.saturating_sub(37);
+                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             } else {
-                let padding = terminal_width.saturating_sub(2);
+                let padding = terminal_width.saturating_sub(3);
                 stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             }
             
@@ -858,9 +913,14 @@ impl App {
         stdout.queue(MoveTo(0, status_start_row))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
         stdout.queue(Print("Status: "))?;
-        if let Some(selected_topic) = self.topic_list_state.get_selected_topic() {
-            stdout.queue(Print(format!("Page 1/1 | {} messages | Selected: {}", 
-                                     selected_topic.message_count, selected_topic.topic)))?;
+        
+        let message_count = self.message_list_state.messages.len();
+        let current_page = self.message_list_state.page;
+        let total_pages = (self.message_list_state.total_count + self.message_list_state.per_page - 1) / self.message_list_state.per_page;
+        
+        if let Some(topic) = &self.message_list_state.current_topic {
+            stdout.queue(Print(format!("Page {}/{} | {} messages | Topic: {}", 
+                                     current_page, total_pages.max(1), message_count, topic)))?;
         }
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
