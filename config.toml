@@ -1,0 +1,21 @@
+[mqtt]
+host = "127.0.0.1"
+port = 1883
+client_id = "mqtt_log_viewer"
+
+[database]
+path = "./mqtt_logs.db"
+max_messages = 100000
+auto_cleanup = true
+cleanup_days = 30
+
+[ui]
+refresh_interval_ms = 250
+max_payload_preview = 50
+theme = "dark"
+enable_json_highlight = true
+
+[performance]
+max_memory_mb = 100
+cache_size = 1000
+batch_size = 100

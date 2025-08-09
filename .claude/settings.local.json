@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo:*)",
+      "Bash(rm:*)",
+      "Bash(mosquitto_pub:*)",
+      "Bash(mosquitto:*)",
+      "Bash(echo $PATH)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/mosquitto\")",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_sub.exe\" --help)",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_sub.exe\" -h 127.0.0.1 -t \"test/topic\" -C 1 --timeout 2)",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_sub.exe\" -h 127.0.0.1 -t \"test/topic\" -C 1)",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/topic\" -m '{\"\"temperature\"\": 25, \"\"humidity\"\": 60}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/temperature\" -m '{\"\"value\"\": 22.5, \"\"unit\"\": \"\"celsius\"\", \"\"timestamp\"\": \"\"2025-08-09T02:10:00Z\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/humidity\" -m '{\"\"value\"\": 65, \"\"unit\"\": \"\"percent\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"devices/status\" -m '{\"\"device_id\"\": \"\"dev001\"\", \"\"status\"\": \"\"online\"\", \"\"last_seen\"\": \"\"2025-08-09T02:10:30Z\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/demo\" -m '{\"\"message\"\": \"\"Hello MQTT Log Viewer!\"\", \"\"timestamp\"\": \"\"2025-08-09T02:30:00Z\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/temp\" -m '{\"\"temperature\"\": 23.5, \"\"unit\"\": \"\"C\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/keyboard\" -m '{\"\"test\"\": \"\"keyboard navigation\"\", \"\"value\"\": 42}')",
+      "Bash(timeout 10 cargo run)",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/temperature\" -m '{\"\"value\"\": 22.5, \"\"unit\"\": \"\"celsius\"\", \"\"timestamp\"\": \"\"2025-08-09T05:15:00Z\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"devices/status\" -m '{\"\"device_id\"\": \"\"dev001\"\", \"\"status\"\": \"\"online\"\", \"\"last_seen\"\": \"\"2025-08-09T05:15:30Z\"\"}')",
+      "Bash(git add:*)",
+      "Bash(timeout 15 cargo run)"
+    ],
+    "deny": []
+  }
+}
