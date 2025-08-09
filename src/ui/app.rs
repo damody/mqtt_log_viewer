@@ -227,6 +227,24 @@ impl App {
                     self.render()?;
                 }
                 
+                if self.is_key_just_pressed(0x21) { // VK_PRIOR (Page Up)
+                    std::fs::write("debug_key.txt", "PAGE UP key detected via WinAPI!").ok();
+                    tracing::debug!("PAGE UP key detected via Windows API");
+                    if self.handle_event(AppEvent::PageUp).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x22) { // VK_NEXT (Page Down)
+                    std::fs::write("debug_key.txt", "PAGE DOWN key detected via WinAPI!").ok();
+                    tracing::debug!("PAGE DOWN key detected via Windows API");
+                    if self.handle_event(AppEvent::PageDown).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
                 if self.is_key_just_pressed(0x0D) { // VK_RETURN (Enter)
                     std::fs::write("debug_key.txt", "ENTER key detected via WinAPI!").ok();
                     tracing::debug!("ENTER key detected via Windows API");
@@ -235,6 +253,8 @@ impl App {
                     }
                     self.render()?;
                 }
+                
+                // Tab events are handled by crossterm to avoid double processing
                 
                 // 檢測 Ctrl+C (需要同時檢測兩個鍵)
                 unsafe {
@@ -246,9 +266,24 @@ impl App {
                 }
             }
             
-            // Handle resize events only (key events handled by Windows API)
+            // Handle crossterm events (for character input and resize)
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
+                    Event::Key(key_event) => {
+                        tracing::debug!("Raw key event detected: {:?}", key_event);
+                        // 處理字符輸入事件和Backspace事件
+                        let app_event = AppEvent::from(key_event);
+                        tracing::debug!("Converted to AppEvent: {:?}", app_event);
+                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) {
+                            tracing::debug!("Input/Backspace/Tab event detected: {:?}", app_event);
+                            if self.handle_event(app_event).await? {
+                                break;
+                            }
+                            self.render()?;
+                        } else {
+                            tracing::debug!("Non-input event ignored: {:?}", app_event);
+                        }
+                    }
                     Event::Resize(width, height) => {
                         self.terminal_width = width;
                         self.terminal_height = height;
@@ -340,6 +375,24 @@ impl App {
                     self.render()?;
                 }
                 
+                if self.is_key_just_pressed(0x21) { // VK_PRIOR (Page Up)
+                    std::fs::write("debug_key.txt", "PAGE UP key detected via WinAPI!").ok();
+                    tracing::debug!("PAGE UP key detected via Windows API");
+                    if self.handle_event(AppEvent::PageUp).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x22) { // VK_NEXT (Page Down)
+                    std::fs::write("debug_key.txt", "PAGE DOWN key detected via WinAPI!").ok();
+                    tracing::debug!("PAGE DOWN key detected via Windows API");
+                    if self.handle_event(AppEvent::PageDown).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
                 if self.is_key_just_pressed(0x0D) { // VK_RETURN (Enter)
                     std::fs::write("debug_key.txt", "ENTER key detected via WinAPI!").ok();
                     tracing::debug!("ENTER key detected via Windows API");
@@ -348,6 +401,8 @@ impl App {
                     }
                     self.render()?;
                 }
+                
+                // Tab events are handled by crossterm to avoid double processing
                 
                 // 檢測 Ctrl+C (需要同時檢測兩個鍵)
                 unsafe {
@@ -359,9 +414,24 @@ impl App {
                 }
             }
             
-            // Handle resize events only (key events handled by Windows API)
+            // Handle crossterm events (for character input and resize)
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
+                    Event::Key(key_event) => {
+                        tracing::debug!("Raw key event detected: {:?}", key_event);
+                        // 處理字符輸入事件和Backspace事件
+                        let app_event = AppEvent::from(key_event);
+                        tracing::debug!("Converted to AppEvent: {:?}", app_event);
+                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) {
+                            tracing::debug!("Input/Backspace/Tab event detected: {:?}", app_event);
+                            if self.handle_event(app_event).await? {
+                                break;
+                            }
+                            self.render()?;
+                        } else {
+                            tracing::debug!("Non-input event ignored: {:?}", app_event);
+                        }
+                    }
                     Event::Resize(width, height) => {
                         self.terminal_width = width;
                         self.terminal_height = height;
@@ -454,31 +524,80 @@ impl App {
     }
     
     async fn handle_message_list_event(&mut self, event: AppEvent) -> Result<()> {
+        // 如果正在編輯模式，處理輸入
+        if self.message_list_state.is_editing {
+            return self.handle_message_list_filter_input(event).await;
+        }
+        
         match event {
+            AppEvent::Tab => {
+                tracing::debug!("Tab pressed - switching focus");
+                self.message_list_state.next_focus();
+                // Tab到filter欄位時自動進入編輯模式
+                match self.message_list_state.get_focus() {
+                    crate::ui::views::message_list::FocusTarget::PayloadFilter |
+                    crate::ui::views::message_list::FocusTarget::TimeFilterFrom |
+                    crate::ui::views::message_list::FocusTarget::TimeFilterTo => {
+                        self.message_list_state.start_editing();
+                        tracing::debug!("Auto-started editing after Tab");
+                    }
+                    crate::ui::views::message_list::FocusTarget::MessageList => {
+                        self.message_list_state.stop_editing();
+                        tracing::debug!("Stopped editing when Tab to message list");
+                    }
+                }
+            }
+            AppEvent::Enter => {
+                // Enter鍵的處理
+                match self.message_list_state.get_focus() {
+                    crate::ui::views::message_list::FocusTarget::PayloadFilter |
+                    crate::ui::views::message_list::FocusTarget::TimeFilterFrom |
+                    crate::ui::views::message_list::FocusTarget::TimeFilterTo => {
+                        // 在filter欄位按Enter應用過濾器
+                        self.message_list_state.stop_editing();
+                        self.apply_message_list_filters().await?;
+                    }
+                    crate::ui::views::message_list::FocusTarget::MessageList => {
+                        // 導航到payload detail
+                        if let Some(_msg) = self.message_list_state.get_selected_message() {
+                            self.state = AppState::PayloadDetail;
+                            self.needs_full_redraw = true;
+                        }
+                    }
+                }
+            }
             AppEvent::NavigateUp => {
-                tracing::debug!("Navigate up in message list");
-                self.message_list_state.move_up();
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    tracing::debug!("Navigate up in message list");
+                    self.message_list_state.move_up();
+                }
             }
             AppEvent::NavigateDown => {
-                tracing::debug!("Navigate down in message list");
-                self.message_list_state.move_down();
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    tracing::debug!("Navigate down in message list");
+                    self.message_list_state.move_down();
+                }
             }
             AppEvent::PageUp => {
-                self.message_list_state.page_up();
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    self.message_list_state.page_up(&self.repository).await?;
+                }
             }
             AppEvent::PageDown => {
-                self.message_list_state.page_down();
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    self.message_list_state.page_down(&self.repository).await?;
+                }
             }
             AppEvent::NavigateLeft => {
                 tracing::debug!("Navigate left from message list - returning to topic list");
                 self.navigate_back()?;
             }
-            AppEvent::NavigateRight | AppEvent::Enter => {
-                if let Some(_msg) = self.message_list_state.get_selected_message() {
-                    // Navigate to payload detail
-                    self.state = AppState::PayloadDetail;
-                    self.needs_full_redraw = true;
-                    // TODO: Set payload detail state
+            AppEvent::NavigateRight => {
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    if let Some(_msg) = self.message_list_state.get_selected_message() {
+                        self.state = AppState::PayloadDetail;
+                        self.needs_full_redraw = true;
+                    }
                 }
             }
             _ => {}
@@ -486,6 +605,79 @@ impl App {
         Ok(())
     }
     
+    async fn handle_message_list_filter_input(&mut self, event: AppEvent) -> Result<()> {
+        match event {
+            AppEvent::Tab => {
+                tracing::debug!("Tab pressed in editing mode - switching focus");
+                self.message_list_state.next_focus();
+                // 切換到其他filter欄位時繼續編輯模式，切換到訊息列表時停止編輯
+                match self.message_list_state.get_focus() {
+                    crate::ui::views::message_list::FocusTarget::MessageList => {
+                        self.message_list_state.stop_editing();
+                        tracing::debug!("Stopped editing when Tab to message list");
+                    }
+                    _ => {
+                        tracing::debug!("Continue editing in new filter field");
+                    }
+                }
+            }
+            AppEvent::Input(c) if c != '\0' => {
+                if let Some(input) = self.message_list_state.get_active_input_mut() {
+                    input.push(c);
+                    tracing::debug!("Added character '{}' to filter input", c);
+                }
+            }
+            AppEvent::Backspace => {
+                if let Some(input) = self.message_list_state.get_active_input_mut() {
+                    input.pop();
+                    tracing::debug!("Removed character from filter input");
+                }
+            }
+            AppEvent::Enter => {
+                tracing::debug!("Filter input submitted");
+                self.message_list_state.stop_editing();
+                // 應用過濾器並重新載入訊息
+                self.apply_message_list_filters().await?;
+            }
+            AppEvent::Escape => {
+                tracing::debug!("Filter input cancelled");
+                self.message_list_state.stop_editing();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    
+    async fn apply_message_list_filters(&mut self) -> Result<()> {
+        // 更新message list的filter criteria
+        if !self.message_list_state.payload_filter_input.is_empty() {
+            self.message_list_state.filter.payload_regex = Some(self.message_list_state.payload_filter_input.clone());
+        } else {
+            self.message_list_state.filter.payload_regex = None;
+        }
+        
+        // 處理時間過濾器
+        if !self.message_list_state.time_from_input.is_empty() {
+            if let Ok(parsed_time) = chrono::NaiveDateTime::parse_from_str(&self.message_list_state.time_from_input, "%Y-%m-%d %H:%M:%S") {
+                self.message_list_state.filter.start_time = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(parsed_time, chrono::Utc));
+            }
+        }
+        
+        if !self.message_list_state.time_to_input.is_empty() {
+            if let Ok(parsed_time) = chrono::NaiveDateTime::parse_from_str(&self.message_list_state.time_to_input, "%Y-%m-%d %H:%M:%S") {
+                self.message_list_state.filter.end_time = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(parsed_time, chrono::Utc));
+            }
+        }
+        
+        // 重設到第一頁並重新載入訊息
+        self.message_list_state.page = 1;
+        self.message_list_state.selected_index = 0;
+        self.message_list_state.load_messages(&self.repository).await?;
+        
+        tracing::debug!("Applied message list filters and reloaded messages");
+        Ok(())
+    }
+
     async fn handle_payload_detail_event(&mut self, event: AppEvent) -> Result<()> {
         match event {
             AppEvent::NavigateLeft => {
@@ -813,19 +1005,82 @@ impl App {
         } else {
             error!("No topic selected");
         }
-        // Render payload filter line 
+        // Render payload filter line with focus indicator and content
         stdout.queue(MoveTo(0, 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("│ Payload Filter: [___________] [Apply] [Clear]"))?;
-        let padding = terminal_width.saturating_sub(48);
+        let payload_filter_text = if !self.message_list_state.payload_filter_input.is_empty() {
+            &self.message_list_state.payload_filter_input
+        } else if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
+            if self.message_list_state.is_editing {
+                "<<<EDITING>>>"
+            } else {
+                "<<<FOCUSED>>>"
+            }
+        } else {
+            "___________"
+        };
+        
+        if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+        }
+        stdout.queue(Print(&format!("│ Payload Filter: [{}] [Apply] [Clear]", payload_filter_text)))?;
+        if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
+            stdout.queue(ResetColor)?;
+        }
+        let line_len = 23 + payload_filter_text.len() + 17; // "│ Payload Filter: [" + content + "] [Apply] [Clear]"
+        let padding = terminal_width.saturating_sub(line_len + 1);
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
         
-        // Render time filter line
+        // Render time filter line with focus indicators and content
         stdout.queue(MoveTo(0, 2))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("│ Time: From [__________] To [__________] [Apply]"))?;
-        let padding = terminal_width.saturating_sub(49);
+        let focus = self.message_list_state.get_focus();
+        
+        let from_text = if !self.message_list_state.time_from_input.is_empty() {
+            &self.message_list_state.time_from_input
+        } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
+            if self.message_list_state.is_editing {
+                "<<<EDITING>>>"
+            } else {
+                "<<<FOCUS>>>"
+            }
+        } else {
+            "__________"
+        };
+        
+        let to_text = if !self.message_list_state.time_to_input.is_empty() {
+            &self.message_list_state.time_to_input
+        } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+            if self.message_list_state.is_editing {
+                "<<<EDITING>>>"
+            } else {
+                "<<<FOCUS>>>"
+            }
+        } else {
+            "__________"
+        };
+        
+        stdout.queue(Print("│ Time: From ["))?;
+        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+        }
+        stdout.queue(Print(from_text))?;
+        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
+            stdout.queue(ResetColor)?;
+        }
+        stdout.queue(Print("] To ["))?;
+        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+        }
+        stdout.queue(Print(to_text))?;
+        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+            stdout.queue(ResetColor)?;
+        }
+        stdout.queue(Print("] [Apply]"))?;
+        
+        let line_len = 16 + from_text.len() + 6 + to_text.len() + 9; // "│ Time: From [" + from + "] To [" + to + "] [Apply]"
+        let padding = terminal_width.saturating_sub(line_len + 1);
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
         
@@ -861,10 +1116,17 @@ impl App {
             stdout.queue(Print("│ "))?;
             
             if let Some(msg) = messages.get(i as usize) {
-                // Highlight selected row
+                // Highlight selected row with focus indication
                 if i as usize == selected_index {
-                    stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
-                    stdout.queue(Print("> "))?;
+                    let is_message_list_focused = matches!(self.message_list_state.get_focus(), 
+                        crate::ui::views::message_list::FocusTarget::MessageList);
+                    if is_message_list_focused {
+                        stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+                        stdout.queue(Print(">>"))?;
+                    } else {
+                        stdout.queue(SetForegroundColor(crossterm::style::Color::DarkCyan))?;
+                        stdout.queue(Print("> "))?;
+                    }
                 } else {
                     stdout.queue(Print("  "))?;
                 }
@@ -925,7 +1187,7 @@ impl App {
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←][ESC]back [f]ilter [Enter]view [↑↓]navigate [j]son [h]elp"))?;
+        stdout.queue(Print("[←][ESC]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [h]elp"))?;
         
         stdout.flush()?;
         info!("render_message_list() completed - MessageList UI should now be visible");
