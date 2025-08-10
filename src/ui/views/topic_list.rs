@@ -101,6 +101,24 @@ impl TopicListState {
         self.adjust_scroll();
     }
     
+    pub fn move_to_top(&mut self) {
+        tracing::debug!("move_to_top called - topics.len()={}", self.topics.len());
+        if !self.topics.is_empty() {
+            self.selected_index = 0;
+            self.adjust_scroll();
+            tracing::debug!("Moved to top - selected_index: {}", self.selected_index);
+        }
+    }
+    
+    pub fn move_to_bottom(&mut self) {
+        tracing::debug!("move_to_bottom called - topics.len()={}", self.topics.len());
+        if !self.topics.is_empty() {
+            self.selected_index = self.topics.len() - 1;
+            self.adjust_scroll();
+            tracing::debug!("Moved to bottom - selected_index: {}", self.selected_index);
+        }
+    }
+    
     fn adjust_scroll(&mut self) {
         if self.selected_index < self.scroll_offset {
             self.scroll_offset = self.selected_index;

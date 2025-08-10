@@ -174,17 +174,12 @@ impl MessageListState {
     }
     
     pub async fn page_down(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
-        // Load next page to check if there are more messages
-        let current_page = self.page;
-        self.page += 1;
-        let old_messages_len = self.messages.len();
-        self.load_messages(repo).await?;
-        
-        if self.messages.is_empty() || self.messages.len() < self.per_page {
-            // No more messages, revert to previous page
-            self.page = current_page;
+        // Check if there are more pages based on total count
+        let current_messages_end = self.page * self.per_page;
+        if current_messages_end < self.total_count {
+            // There are more messages, load next page
+            self.page += 1;
             self.load_messages(repo).await?;
-        } else {
             self.selected_index = 0;
         }
         Ok(())
@@ -196,6 +191,39 @@ impl MessageListState {
     
     pub fn page_down_selection(&mut self) {
         self.selected_index = (self.selected_index + 10).min(self.messages.len().saturating_sub(1));
+    }
+    
+    pub async fn move_to_top(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        tracing::debug!("move_to_top called - jumping to first page");
+        // Jump to first page and first element
+        self.page = 1;
+        self.load_messages(repo).await?;
+        if !self.messages.is_empty() {
+            self.selected_index = 0;
+            tracing::debug!("Moved to top - page: {}, selected_index: {}", self.page, self.selected_index);
+        }
+        Ok(())
+    }
+    
+    pub async fn move_to_bottom(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        tracing::debug!("move_to_bottom called - jumping to last page");
+        // Calculate last page number
+        let last_page = if self.total_count == 0 {
+            1
+        } else {
+            ((self.total_count - 1) / self.per_page) + 1
+        };
+        
+        // Jump to last page
+        self.page = last_page;
+        self.load_messages(repo).await?;
+        
+        if !self.messages.is_empty() {
+            self.selected_index = self.messages.len() - 1;
+            tracing::debug!("Moved to bottom - page: {}, selected_index: {}, total_count: {}", 
+                          self.page, self.selected_index, self.total_count);
+        }
+        Ok(())
     }
     
     pub fn get_selected_message(&self) -> Option<&Message> {

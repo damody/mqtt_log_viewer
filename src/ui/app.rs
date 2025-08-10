@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent},
+    event::{self, Event, KeyCode, KeyEvent, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
     terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType},
     cursor::{Hide, Show, MoveTo},
     style::{Print, SetForegroundColor, ResetColor},
@@ -146,6 +146,14 @@ impl App {
         stdout.execute(Clear(ClearType::All))?;
         stdout.execute(MoveTo(0, 0))?;
         
+        // Enable keyboard enhancement flags for better key detection
+        let _ = stdout.queue(PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        ));
+        let _ = stdout.flush();
+        
         let result = self.main_loop().await;
         
         // Cleanup terminal
@@ -168,6 +176,14 @@ impl App {
         stdout.execute(Hide)?;
         stdout.execute(Clear(ClearType::All))?;
         stdout.execute(MoveTo(0, 0))?;
+        
+        // Enable keyboard enhancement flags for better key detection
+        let _ = stdout.queue(PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        ));
+        let _ = stdout.flush();
         
         let result = self.main_loop_with_status(connection_status).await;
         
@@ -213,7 +229,7 @@ impl App {
                 self.handle_key_repeat().await?;
             }
             
-            // Windows API 直接按鍵檢測（邊沿觸發）
+            // Windows API 直接按鍵檢測
             #[cfg(windows)]
             {
                 // 檢測 ESC 鍵
@@ -254,6 +270,24 @@ impl App {
                     std::fs::write("debug_key.txt", "RIGHT key detected via WinAPI!").ok();
                     tracing::debug!("RIGHT key detected via Windows API");
                     if self.handle_event(AppEvent::NavigateRight).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x24) { // VK_HOME
+                    std::fs::write("debug_key.txt", "HOME key detected via WinAPI!").ok();
+                    tracing::debug!("HOME key detected via Windows API");
+                    if self.handle_event(AppEvent::Home).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x23) { // VK_END
+                    std::fs::write("debug_key.txt", "END key detected via WinAPI!").ok();
+                    tracing::debug!("END key detected via Windows API");
+                    if self.handle_event(AppEvent::End).await? {
                         break;
                     }
                     self.render()?;
@@ -392,6 +426,24 @@ impl App {
                     std::fs::write("debug_key.txt", "RIGHT key detected via WinAPI!").ok();
                     tracing::debug!("RIGHT key detected via Windows API");
                     if self.handle_event(AppEvent::NavigateRight).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x24) { // VK_HOME
+                    std::fs::write("debug_key.txt", "HOME key detected via WinAPI!").ok();
+                    tracing::debug!("HOME key detected via Windows API");
+                    if self.handle_event(AppEvent::Home).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x23) { // VK_END
+                    std::fs::write("debug_key.txt", "END key detected via WinAPI!").ok();
+                    tracing::debug!("END key detected via Windows API");
+                    if self.handle_event(AppEvent::End).await? {
                         break;
                     }
                     self.render()?;
@@ -553,6 +605,14 @@ impl App {
             },
             AppEvent::PageUp => self.topic_list_state.page_up(),
             AppEvent::PageDown => self.topic_list_state.page_down(),
+            AppEvent::Home => {
+                tracing::debug!("Home key pressed in topic list - moving to top");
+                self.topic_list_state.move_to_top();
+            },
+            AppEvent::End => {
+                tracing::debug!("End key pressed in topic list - moving to bottom");
+                self.topic_list_state.move_to_bottom();
+            },
             _ => {}
         }
         
@@ -645,6 +705,20 @@ impl App {
                         self.payload_detail_scroll_offset = 0; // 重置滾動偏移
                         self.needs_full_redraw = true;
                     }
+                }
+            }
+            AppEvent::Home => {
+                // 在非編輯模式下，Home鍵用於移動到訊息列表頂部
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    tracing::debug!("Home key pressed in message list - moving to first page first item");
+                    self.message_list_state.move_to_top(&self.repository).await?;
+                }
+            }
+            AppEvent::End => {
+                // 在非編輯模式下，End鍵用於移動到訊息列表底部
+                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
+                    tracing::debug!("End key pressed in message list - moving to last page last item");
+                    self.message_list_state.move_to_bottom(&self.repository).await?;
                 }
             }
             _ => {}

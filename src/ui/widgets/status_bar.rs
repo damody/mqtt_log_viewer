@@ -150,10 +150,10 @@ impl StatusBar {
         
         state.help_text = match view {
             ViewType::TopicList => {
-                "[/]filter [Enter]select [↑↓]navigate [←]back [F5]refresh [F1]help".to_string()
+                "[/]filter [Enter]select [↑↓]navigate [Home/End]first/last [←]back [F5]refresh [F1]help".to_string()
             }
             ViewType::MessageList(_) => {
-                "[←]back [/]filter [Enter]view [↑↓]navigate [F2]json [F1]help".to_string()
+                "[←]back [/]filter [Enter]view [↑↓]navigate [Home/End]first/last [F2]json [F1]help".to_string()
             }
             ViewType::PayloadDetail(_, _) => {
                 "[←]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help".to_string()

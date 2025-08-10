@@ -56,8 +56,14 @@ impl From<KeyEvent> for AppEvent {
             KeyCode::Esc => AppEvent::Escape,
             KeyCode::PageUp => AppEvent::PageUp,
             KeyCode::PageDown => AppEvent::PageDown,
-            KeyCode::Home => AppEvent::Home,
-            KeyCode::End => AppEvent::End,
+            KeyCode::Home => {
+                tracing::debug!("Home key detected in event conversion");
+                AppEvent::Home
+            },
+            KeyCode::End => {
+                tracing::debug!("End key detected in event conversion");
+                AppEvent::End
+            },
             KeyCode::Backspace => AppEvent::Backspace,
             KeyCode::Delete => AppEvent::Delete,
             _ => AppEvent::Input('\0'), // Ignore other keys
