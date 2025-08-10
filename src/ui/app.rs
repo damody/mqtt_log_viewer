@@ -1199,7 +1199,136 @@ impl App {
     }
     
     fn render_payload_detail(&mut self) -> Result<()> {
-        // TODO: Implement payload detail rendering
+        info!("render_payload_detail() called - starting PayloadDetail UI rendering");
+        let mut stdout = stdout();
+        
+        // Always clear screen when entering payload detail (third layer)
+        stdout.execute(Clear(crossterm::terminal::ClearType::All))?;
+        stdout.execute(MoveTo(0, 0))?;
+        info!("Screen cleared and cursor moved to 0,0");
+        
+        let terminal_width: usize = self.terminal_width as usize;
+        
+        // Get selected message
+        let selected_message = match self.message_list_state.get_selected_message() {
+            Some(msg) => msg,
+            None => {
+                error!("No message selected for payload detail");
+                return Ok(());
+            }
+        };
+        
+        // Render title bar - Topic: xxx | Message Detail
+        stdout.queue(MoveTo(0, 0))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        let title = format!("┌─ Message Detail: {} ", selected_message.topic);
+        let padding = terminal_width.saturating_sub(title.len() + 1);
+        stdout.queue(Print(&title))?;
+        stdout.queue(Print(&"─".repeat(padding)))?;
+        stdout.queue(Print("┐"))?;
+        
+        // Render metadata line 1
+        stdout.queue(MoveTo(0, 1))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        let timestamp_str = selected_message.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        stdout.queue(Print(&format!("│ Time: {}", timestamp_str)))?;
+        let line_len = 8 + timestamp_str.len(); // "│ Time: " + timestamp
+        let padding = terminal_width.saturating_sub(line_len + 1);
+        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+        stdout.queue(Print("│"))?;
+        
+        // Render metadata line 2
+        stdout.queue(MoveTo(0, 2))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        stdout.queue(Print(&format!("│ QoS: {} | Retain: {}", selected_message.qos, selected_message.retain)))?;
+        let qos_retain_text = format!(" QoS: {} | Retain: {}", selected_message.qos, selected_message.retain);
+        let line_len = 1 + qos_retain_text.len(); // "│" + text
+        let padding = terminal_width.saturating_sub(line_len + 1);
+        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+        stdout.queue(Print("│"))?;
+        
+        // Render separator line
+        stdout.queue(MoveTo(0, 3))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        let separator = format!("├{:─<width$}┤", "─ Payload ", width = terminal_width.saturating_sub(2));
+        stdout.queue(Print(&separator))?;
+        
+        // Calculate content area
+        let content_start_row = 4;
+        let status_rows = 2;
+        let available_height = self.terminal_height.saturating_sub(content_start_row + status_rows + 1);
+        
+        // Try to parse payload as JSON for formatting
+        let payload_lines: Vec<String> = match serde_json::from_str::<serde_json::Value>(&selected_message.payload) {
+            Ok(json_value) => {
+                // Format JSON with proper indentation
+                match serde_json::to_string_pretty(&json_value) {
+                    Ok(pretty_json) => pretty_json.lines().map(|line| line.to_string()).collect(),
+                    Err(_) => selected_message.payload.lines().map(|line| line.to_string()).collect(),
+                }
+            }
+            Err(_) => {
+                // Not JSON, display as plain text
+                selected_message.payload.lines().map(|line| line.to_string()).collect()
+            }
+        };
+        
+        // Render payload content
+        for i in 0..available_height {
+            let row = content_start_row + i as u16;
+            stdout.queue(MoveTo(0, row))?;
+            stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+            
+            stdout.queue(Print("│ "))?;
+            
+            if let Some(line) = payload_lines.get(i as usize) {
+                // Truncate line if too long for terminal
+                let max_content_width = terminal_width.saturating_sub(4); // "│ " + " │"
+                if line.len() > max_content_width {
+                    let truncated = format!("{}...", &line[..max_content_width.saturating_sub(3)]);
+                    stdout.queue(Print(&truncated))?;
+                    let padding = max_content_width.saturating_sub(truncated.len());
+                    stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+                } else {
+                    stdout.queue(Print(line))?;
+                    let padding = max_content_width.saturating_sub(line.len());
+                    stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+                }
+            } else {
+                // Empty line
+                let padding = terminal_width.saturating_sub(3); // "│ " + "│"
+                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+            }
+            
+            stdout.queue(Print("│"))?;
+        }
+        
+        // Render bottom border
+        let bottom_row = content_start_row + available_height as u16;
+        stdout.queue(MoveTo(0, bottom_row))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        let bottom_border = format!("└{:─<width$}┘", "", width = terminal_width.saturating_sub(2));
+        stdout.queue(Print(&bottom_border))?;
+        
+        // Render status lines
+        let status_start_row = self.terminal_height.saturating_sub(status_rows);
+        
+        // Render info line
+        stdout.queue(MoveTo(0, status_start_row))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        let payload_size = selected_message.payload.len();
+        let line_count = payload_lines.len();
+        stdout.queue(Print(format!("Payload: {} bytes | {} lines | Topic: {}", 
+                                 payload_size, line_count, selected_message.topic)))?;
+        
+        // Render help line
+        stdout.queue(MoveTo(0, status_start_row + 1))?;
+        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
+        stdout.queue(Print("[←][ESC]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help"))?;
+        
+        stdout.flush()?;
+        info!("render_payload_detail() completed - PayloadDetail UI should now be visible");
+        self.needs_full_redraw = false; // Reset the redraw flag after successful render
         Ok(())
     }
     
