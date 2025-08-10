@@ -24,6 +24,8 @@ pub struct MessageListState {
     pub time_from_input: String,
     pub time_to_input: String,
     pub is_editing: bool,
+    pub filter_error: Option<String>, // 用於顯示過濾器錯誤
+    pub cursor_position: usize, // 當前遊標在輸入欄位中的位置
 }
 
 impl MessageListState {
@@ -42,6 +44,8 @@ impl MessageListState {
             time_from_input: String::new(),
             time_to_input: String::new(),
             is_editing: false,
+            filter_error: None,
+            cursor_position: 0,
         }
     }
     
@@ -71,8 +75,10 @@ impl MessageListState {
     }
     
     pub fn set_topic(&mut self, topic: String) {
+        tracing::info!("set_topic: topic set to {}", topic);
         self.current_topic = Some(topic);
         self.clear();
+        // Don't clear filters here - let the user decide when to clear them
     }
     
     pub async fn load_messages(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
@@ -81,15 +87,19 @@ impl MessageListState {
             filter.limit = Some(self.per_page as i64);
             filter.offset = Some(((self.page - 1) * self.per_page) as i64);
             
+            tracing::info!("load_messages filter: {:?}", filter);
             self.messages = repo.get_messages_by_topic(topic, &filter).await?;
             
-            // Get total count for this topic (without limit/offset)
+            // Get total count for this topic with same filters (but without limit/offset)
             let count_filter = FilterCriteria {
-                topic_regex: Some(format!("^{}$", regex::escape(topic))),
+                topic_regex: self.filter.topic_regex.clone(),
+                payload_regex: self.filter.payload_regex.clone(),
+                start_time: self.filter.start_time.clone(),
+                end_time: self.filter.end_time.clone(),
                 limit: None,
                 offset: None,
-                ..Default::default()
             };
+            tracing::info!("load_messages count_filter: {:?}", count_filter);
             if let Ok(count_messages) = repo.get_messages_by_topic(topic, &count_filter).await {
                 self.total_count = count_messages.len();
             }
@@ -230,11 +240,68 @@ impl MessageListState {
     pub fn start_editing(&mut self) {
         if matches!(self.focus, FocusTarget::PayloadFilter | FocusTarget::TimeFilterFrom | FocusTarget::TimeFilterTo) {
             self.is_editing = true;
+            // 將遊標移到當前輸入欄位的末端
+            self.cursor_position = self.get_active_input().len();
         }
     }
     
     pub fn stop_editing(&mut self) {
         self.is_editing = false;
+    }
+    
+    // 遊標操作方法
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+    
+    pub fn move_cursor_right(&mut self) {
+        let current_text_len = self.get_active_input().len();
+        if self.cursor_position < current_text_len {
+            self.cursor_position += 1;
+        }
+    }
+    
+    pub fn move_cursor_home(&mut self) {
+        self.cursor_position = 0;
+    }
+    
+    pub fn move_cursor_end(&mut self) {
+        self.cursor_position = self.get_active_input().len();
+    }
+    
+    // 在遊標位置插入文字
+    pub fn insert_char_at_cursor(&mut self, c: char) {
+        let cursor_pos = self.cursor_position;
+        if let Some(input) = self.get_active_input_mut() {
+            if cursor_pos <= input.len() {
+                input.insert(cursor_pos, c);
+                self.cursor_position += 1;
+            }
+        }
+    }
+    
+    // 在遊標位置刪除字元（向後刪除）
+    pub fn delete_char_at_cursor(&mut self) {
+        let cursor_pos = self.cursor_position;
+        if let Some(input) = self.get_active_input_mut() {
+            if cursor_pos > 0 && cursor_pos <= input.len() {
+                input.remove(cursor_pos - 1);
+                self.cursor_position -= 1;
+            }
+        }
+    }
+    
+    // 在遊標位置插入字串（用於貼上）
+    pub fn insert_string_at_cursor(&mut self, s: &str) {
+        let cursor_pos = self.cursor_position;
+        if let Some(input) = self.get_active_input_mut() {
+            if cursor_pos <= input.len() {
+                input.insert_str(cursor_pos, s);
+                self.cursor_position += s.len();
+            }
+        }
     }
     
     pub fn get_cursor_position(&self) -> Option<(u16, u16)> {
@@ -252,12 +319,7 @@ impl MessageListState {
             FocusTarget::MessageList => return None, // No cursor for message list
         };
         
-        let cursor_offset = match self.focus {
-            FocusTarget::PayloadFilter => self.payload_filter_input.len().min(11) as u16,
-            FocusTarget::TimeFilterFrom => self.time_from_input.len().min(11) as u16,
-            FocusTarget::TimeFilterTo => self.time_to_input.len().min(11) as u16,
-            FocusTarget::MessageList => 0,
-        };
+        let cursor_offset = self.cursor_position.min(11) as u16;
         
         Some((field_col + cursor_offset, field_row))
     }

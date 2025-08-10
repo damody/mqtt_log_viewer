@@ -22,6 +22,7 @@ pub enum AppEvent {
     Input(char),
     Backspace,
     Delete,
+    Paste(String),
 }
 
 impl From<KeyEvent> for AppEvent {
@@ -36,7 +37,15 @@ impl From<KeyEvent> for AppEvent {
             KeyCode::Char('/') => AppEvent::Filter,
             KeyCode::F(2) => AppEvent::JsonToggle,
             KeyCode::F(1) => AppEvent::Help,
-            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => AppEvent::Copy,
+            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::ALT) => {
+                println!("Alt+C detected, generating Copy event");
+                tracing::info!("Alt+C key combination detected, generating Copy event");
+                AppEvent::Copy
+            },
+            KeyCode::Char('v') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                // 這裡我們先返回一個空的Paste事件，實際的剪貼簿內容需要在app.rs中獲取
+                AppEvent::Paste(String::new())
+            },
             KeyCode::Tab => AppEvent::Tab,
             KeyCode::Char(c) => AppEvent::Input(c),
             KeyCode::Up => AppEvent::NavigateUp,

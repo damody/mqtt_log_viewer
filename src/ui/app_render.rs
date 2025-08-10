@@ -210,7 +210,7 @@ impl App {
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←][ESC]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [F1]help"))?;
+        stdout.queue(Print("[←]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [F1]help"))?;
         
         // Position cursor for input if editing
         if let Some((col, row)) = self.get_message_list_cursor_position() {
@@ -256,11 +256,36 @@ impl App {
         // Render metadata lines
         self.render_payload_detail_metadata(&mut stdout, terminal_width, &selected_message)?;
         
-        // Render separator line
+        // Render separator line with payload selection indicator
         stdout.queue(MoveTo(0, 3))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let separator = format!("├{:─<width$}┤", "─ Payload ", width = terminal_width.saturating_sub(2));
-        stdout.queue(Print(&separator))?;
+        let selection = self.get_payload_detail_selection();
+        
+        stdout.queue(Print("├"))?;
+        match selection {
+            crate::ui::app::PayloadDetailSelection::Payload => {
+                stdout.queue(Print("─ Payload "))?;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+                stdout.queue(Print(">> "))?;
+                stdout.queue(ResetColor)?;
+                let remaining_width = terminal_width.saturating_sub(13); // "├─ Payload >> " = 13 chars
+                stdout.queue(Print(&format!("{:─<width$}┤", "", width = remaining_width)))?;
+            }
+            crate::ui::app::PayloadDetailSelection::FormattedJson => {
+                stdout.queue(Print("─ Formatted JSON "))?;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+                stdout.queue(Print(">> "))?;
+                stdout.queue(ResetColor)?;
+                let remaining_width = terminal_width.saturating_sub(20); // "├─ Formatted JSON >> " = 20 chars
+                stdout.queue(Print(&format!("{:─<width$}┤", "", width = remaining_width)))?;
+            }
+            _ => {
+                // Default display for Topic selection
+                stdout.queue(Print("─ Payload "))?;
+                let remaining_width = terminal_width.saturating_sub(12); // "├─ Payload " = 12 chars
+                stdout.queue(Print(&format!("{:─<width$}┤", "", width = remaining_width)))?;
+            }
+        }
         
         // Calculate content area
         let content_start_row = 4;
@@ -285,7 +310,7 @@ impl App {
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←][ESC]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help"))?;
+        stdout.queue(Print("[←]back [Tab]switch [Alt+C]copy [↑↓]scroll [PgUp/PgDn]page [F1]help"))?;
         
         stdout.flush()?;
         info!("render_payload_detail() completed - PayloadDetail UI should now be visible");
@@ -307,26 +332,91 @@ impl App {
         
         stdout.queue(MoveTo(0, 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let payload_filter_text = if !message_state.payload_filter_input.is_empty() {
-            &message_state.payload_filter_input
-        } else if matches!(message_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
-            if message_state.is_editing {
-                "<<<EDITING>>>"
-            } else {
-                "<<<FOCUSED>>>"
-            }
-        } else {
-            "___________"
-        };
         
-        if matches!(message_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
+        let is_payload_focused = matches!(message_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter);
+        
+        // 渲染前綴
+        stdout.queue(Print("│ Payload Filter: ["))?;
+        
+        // 如果正在編輯payload filter並且有焦點，渲染帶有遊標反白的文字
+        if is_payload_focused && message_state.is_editing {
+            let input_text = &message_state.payload_filter_input;
+            let cursor_pos = message_state.cursor_position;
+            
+            // 設置焦點顏色
             stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
-        }
-        stdout.queue(Print(&format!("│ Payload Filter: [{}] [Apply] [Clear]", payload_filter_text)))?;
-        if matches!(message_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
+            
+            // 渲染遊標前的文字
+            if cursor_pos > 0 {
+                let before_cursor = &input_text[..cursor_pos.min(input_text.len())];
+                stdout.queue(Print(before_cursor))?;
+            }
+            
+            // 渲染遊標位置的字元（反白顯示）
+            if cursor_pos < input_text.len() {
+                let cursor_char = input_text.chars().nth(cursor_pos).unwrap_or(' ');
+                stdout.queue(crossterm::style::SetBackgroundColor(crossterm::style::Color::White))?;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Black))?;
+                stdout.queue(Print(&cursor_char.to_string()))?;
+                stdout.queue(crossterm::style::ResetColor)?;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+                
+                // 渲染遊標後的文字
+                if cursor_pos + 1 < input_text.len() {
+                    let after_cursor = &input_text[cursor_pos + 1..];
+                    stdout.queue(Print(after_cursor))?;
+                }
+            } else {
+                // 遊標在文字末端，顯示一個反白的空格
+                stdout.queue(crossterm::style::SetBackgroundColor(crossterm::style::Color::White))?;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Black))?;
+                stdout.queue(Print(" "))?;
+                stdout.queue(crossterm::style::ResetColor)?;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            }
+            
             stdout.queue(ResetColor)?;
+        } else {
+            // 正常渲染邏輯
+            let payload_filter_text = if !message_state.payload_filter_input.is_empty() {
+                &message_state.payload_filter_input
+            } else if is_payload_focused {
+                if message_state.is_editing {
+                    "<<<EDITING>>>"
+                } else {
+                    "<<<FOCUSED>>>"
+                }
+            } else {
+                "___________"
+            };
+            
+            if is_payload_focused {
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            }
+            stdout.queue(Print(payload_filter_text))?;
+            if is_payload_focused {
+                stdout.queue(ResetColor)?;
+            }
         }
-        let line_len = 23 + payload_filter_text.len() + 17; // "│ Payload Filter: [" + content + "] [Apply] [Clear]"
+        
+        stdout.queue(Print("]"))?;
+        
+        // 顯示錯誤訊息（如果有的話）
+        let content_len = if is_payload_focused && message_state.is_editing {
+            message_state.payload_filter_input.len() + 1 // +1 for cursor space
+        } else if !message_state.payload_filter_input.is_empty() {
+            message_state.payload_filter_input.len()
+        } else {
+            11 // Length of placeholder text
+        };
+        let mut line_len = 20 + content_len; // "│ Payload Filter: [" + content + "]"
+        if let Some(error) = &message_state.filter_error {
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Red))?;
+            stdout.queue(Print(&format!(" {}", error)))?;
+            stdout.queue(ResetColor)?;
+            line_len += error.len() + 1;
+        }
+        
         let padding = terminal_width.saturating_sub(line_len + 1);
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
@@ -380,9 +470,9 @@ impl App {
         if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
             stdout.queue(ResetColor)?;
         }
-        stdout.queue(Print("] [Apply]"))?;
+        stdout.queue(Print("]"))?;
         
-        let line_len = 16 + from_text.len() + 6 + to_text.len() + 9;
+        let line_len = 16 + from_text.len() + 6 + to_text.len() + 1;
         let padding = terminal_width.saturating_sub(line_len + 1);
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
@@ -484,14 +574,45 @@ impl App {
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
         
-        // Render metadata line 2 - QoS and Retain
+        // Render metadata line 2 - Topic with selection indicator and QoS/Retain
         stdout.queue(MoveTo(0, 2))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print(&format!("│ QoS: {} | Retain: {}", selected_message.qos, selected_message.retain)))?;
-        let qos_retain_text = format!(" QoS: {} | Retain: {}", selected_message.qos, selected_message.retain);
-        let line_len = 1 + qos_retain_text.len(); // "│" + text
-        let padding = terminal_width.saturating_sub(line_len + 1);
-        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
+        
+        // 顯示Topic（帶選擇指示器）
+        let is_topic_selected = matches!(self.get_payload_detail_selection(), crate::ui::app::PayloadDetailSelection::Topic);
+        stdout.queue(Print("│ Topic: "))?;
+        if is_topic_selected {
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            stdout.queue(Print(">>"))?;
+        } else {
+            stdout.queue(Print("  "))?;
+        }
+        stdout.queue(Print(&selected_message.topic))?;
+        if is_topic_selected {
+            stdout.queue(ResetColor)?;
+        }
+        
+        // FormattedJson selector on the same line
+        let is_json_selected = matches!(self.get_payload_detail_selection(), crate::ui::app::PayloadDetailSelection::FormattedJson);
+        stdout.queue(Print(" | JSON: "))?;
+        if is_json_selected {
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            stdout.queue(Print(">>"))?;
+        } else {
+            stdout.queue(Print("  "))?;
+        }
+        stdout.queue(Print("Formatted"))?;
+        if is_json_selected {
+            stdout.queue(ResetColor)?;
+        }
+        
+        // QoS and Retain info
+        let qos_retain_text = format!(" | QoS: {} | Retain: {}", selected_message.qos, selected_message.retain);
+        stdout.queue(Print(&qos_retain_text))?;
+        
+        // 簡化padding計算，避免overflow
+        let min_padding = if terminal_width > 50 { 10 } else { 1 };
+        stdout.queue(Print(&format!("{:<width$}", "", width = min_padding)))?;
         stdout.queue(Print("│"))?;
         Ok(())
     }

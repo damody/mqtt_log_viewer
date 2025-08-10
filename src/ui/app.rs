@@ -35,6 +35,13 @@ pub enum AppState {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PayloadDetailSelection {
+    Topic,
+    Payload,
+    FormattedJson,
+}
+
 #[derive(Debug, Clone)]
 struct KeyRepeatState {
     current_key: Option<crossterm::event::KeyCode>,
@@ -65,6 +72,7 @@ pub struct App {
     topic_list_state: TopicListState,
     message_list_state: MessageListState,
     payload_detail_scroll_offset: usize,
+    payload_detail_selection: PayloadDetailSelection,
     
     // MQTT connection info
     mqtt_host: String,
@@ -106,6 +114,7 @@ impl App {
             topic_list_state: TopicListState::default(),
             message_list_state: MessageListState::new(),
             payload_detail_scroll_offset: 0,
+            payload_detail_selection: PayloadDetailSelection::Payload, // 預設選擇payload
             mqtt_host: config.mqtt.host.clone(),
             mqtt_port: config.mqtt.port,
             prev_filter_state: None,
@@ -295,8 +304,8 @@ impl App {
                         // 處理字符輸入事件和Backspace事件
                         let app_event = AppEvent::from(key_event);
                         tracing::debug!("Converted to AppEvent: {:?}", app_event);
-                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) {
-                            tracing::debug!("Input/Backspace/Tab event detected: {:?}", app_event);
+                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) || matches!(app_event, AppEvent::Copy) {
+                            tracing::debug!("Input/Backspace/Tab/Copy event detected: {:?}", app_event);
                             if self.handle_event(app_event).await? {
                                 break;
                             }
@@ -433,8 +442,8 @@ impl App {
                         // 處理字符輸入事件和Backspace事件
                         let app_event = AppEvent::from(key_event);
                         tracing::debug!("Converted to AppEvent: {:?}", app_event);
-                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) {
-                            tracing::debug!("Input/Backspace/Tab event detected: {:?}", app_event);
+                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) || matches!(app_event, AppEvent::Copy) {
+                            tracing::debug!("Input/Backspace/Tab/Copy event detected: {:?}", app_event);
                             if self.handle_event(app_event).await? {
                                 break;
                             }
@@ -460,6 +469,7 @@ impl App {
     }
     
     async fn handle_event(&mut self, event: AppEvent) -> Result<bool> {
+        tracing::debug!("handle_event called with: {:?}, current state: {:?}", event, self.state);
         match event {
             AppEvent::Quit => return Ok(true),
             
@@ -491,10 +501,14 @@ impl App {
             
             _ => {
                 // Handle state-specific events
+                tracing::debug!("Routing event {:?} to state-specific handler for state {:?}", event, self.state);
                 match self.state {
                     AppState::TopicList => self.handle_topic_list_event(event).await?,
                     AppState::MessageList => self.handle_message_list_event(event).await?,
-                    AppState::PayloadDetail => self.handle_payload_detail_event(event).await?,
+                    AppState::PayloadDetail => {
+                        tracing::debug!("Calling handle_payload_detail_event with event: {:?}", event);
+                        self.handle_payload_detail_event(event).await?;
+                    },
                     _ => {}
                 }
             }
@@ -655,19 +669,47 @@ impl App {
                 }
             }
             AppEvent::Input(c) if c != '\0' => {
-                if let Some(input) = self.message_list_state.get_active_input_mut() {
-                    input.push(c);
-                    tracing::debug!("Added character '{}' to filter input", c);
-                    // 即時應用過濾器
-                    self.apply_message_list_filters().await?;
-                }
+                self.message_list_state.insert_char_at_cursor(c);
+                tracing::debug!("Added character '{}' at cursor position {}", c, self.message_list_state.cursor_position);
+                // 即時應用過濾器
+                self.apply_message_list_filters().await?;
             }
             AppEvent::Backspace => {
-                if let Some(input) = self.message_list_state.get_active_input_mut() {
-                    input.pop();
-                    tracing::debug!("Removed character from filter input");
-                    // 即時應用過濾器
-                    self.apply_message_list_filters().await?;
+                self.message_list_state.delete_char_at_cursor();
+                tracing::debug!("Removed character at cursor position");
+                // 即時應用過濾器
+                self.apply_message_list_filters().await?;
+            }
+            AppEvent::NavigateLeft => {
+                // 在編輯模式下，左方向鍵移動遊標
+                self.message_list_state.move_cursor_left();
+                tracing::debug!("Cursor moved left to position {}", self.message_list_state.cursor_position);
+            }
+            AppEvent::NavigateRight => {
+                // 在編輯模式下，右方向鍵移動遊標
+                self.message_list_state.move_cursor_right();
+                tracing::debug!("Cursor moved right to position {}", self.message_list_state.cursor_position);
+            }
+            AppEvent::Home => {
+                self.message_list_state.move_cursor_home();
+                tracing::debug!("Cursor moved to home position");
+            }
+            AppEvent::End => {
+                self.message_list_state.move_cursor_end();
+                tracing::debug!("Cursor moved to end position");
+            }
+            AppEvent::Paste(_) => {
+                // 取得剪貼簿內容並貼上
+                match self.get_clipboard_content() {
+                    Ok(text) => {
+                        self.message_list_state.insert_string_at_cursor(&text);
+                        tracing::debug!("Pasted text '{}' at cursor position", text);
+                        // 即時應用過濾器
+                        self.apply_message_list_filters().await?;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to get clipboard content: {}", e);
+                    }
                 }
             }
             AppEvent::Enter => {
@@ -790,6 +832,103 @@ impl App {
             AppEvent::PageDown => {
                 let page_size = self.get_payload_detail_page_size();
                 self.payload_detail_scroll_offset += page_size;
+            }
+            AppEvent::Tab => {
+                // Tab鍵切換選擇模式 (topic -> payload -> formatted json -> topic...)
+                self.payload_detail_selection = match self.payload_detail_selection {
+                    PayloadDetailSelection::Topic => PayloadDetailSelection::Payload,
+                    PayloadDetailSelection::Payload => PayloadDetailSelection::FormattedJson,
+                    PayloadDetailSelection::FormattedJson => PayloadDetailSelection::Topic,
+                };
+                tracing::debug!("Payload detail selection switched to: {:?}", self.payload_detail_selection);
+            }
+            AppEvent::Copy => {
+                // Alt+C 複製選中的內容
+                tracing::info!("Copy event received in PayloadDetail view");
+                tracing::info!("Current selection: {:?}", self.payload_detail_selection);
+                
+                match self.payload_detail_selection {
+                    PayloadDetailSelection::Topic => {
+                        tracing::info!("Attempting to copy topic");
+                        if let Some(message) = self.get_selected_message() {
+                            tracing::info!("Found message with topic: {}", message.topic);
+                            match self.copy_to_clipboard(&message.topic) {
+                                Ok(()) => {
+                                    tracing::info!("Successfully copied topic to clipboard: {}", message.topic);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to copy topic to clipboard: {}", e);
+                                }
+                            }
+                        } else {
+                            tracing::warn!("No message selected for topic copy");
+                        }
+                    }
+                    PayloadDetailSelection::Payload => {
+                        tracing::info!("Attempting to copy payload");
+                        if let Some(message) = self.get_selected_message() {
+                            tracing::info!("Found message with payload length: {} chars", message.payload.len());
+                            match self.copy_to_clipboard(&message.payload) {
+                                Ok(()) => {
+                                    tracing::info!("Successfully copied payload to clipboard ({} chars)", message.payload.len());
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to copy payload to clipboard: {}", e);
+                                }
+                            }
+                        } else {
+                            tracing::warn!("No message selected for payload copy");
+                        }
+                    }
+                    PayloadDetailSelection::FormattedJson => {
+                        tracing::info!("Attempting to copy formatted JSON");
+                        if let Some(message) = self.get_selected_message() {
+                            tracing::info!("Found message with payload length: {} chars", message.payload.len());
+                            // Try to parse and format as JSON
+                            match serde_json::from_str::<serde_json::Value>(&message.payload) {
+                                Ok(json_value) => {
+                                    match serde_json::to_string_pretty(&json_value) {
+                                        Ok(formatted_json) => {
+                                            tracing::info!("Successfully parsed payload as JSON, formatted length: {} chars", formatted_json.len());
+                                            match self.copy_to_clipboard(&formatted_json) {
+                                                Ok(()) => {
+                                                    tracing::info!("Successfully copied formatted JSON to clipboard ({} chars)", formatted_json.len());
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!("Failed to copy formatted JSON to clipboard: {}", e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to format JSON: {}, copying original payload", e);
+                                            match self.copy_to_clipboard(&message.payload) {
+                                                Ok(()) => {
+                                                    tracing::info!("Successfully copied original payload to clipboard ({} chars)", message.payload.len());
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!("Failed to copy original payload to clipboard: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Payload is not valid JSON: {}, copying original payload", e);
+                                    match self.copy_to_clipboard(&message.payload) {
+                                        Ok(()) => {
+                                            tracing::info!("Successfully copied original payload to clipboard ({} chars)", message.payload.len());
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to copy original payload to clipboard: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            tracing::warn!("No message selected for formatted JSON copy");
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1206,6 +1345,10 @@ impl App {
         self.payload_detail_scroll_offset = offset;
     }
     
+    pub fn get_payload_detail_selection(&self) -> PayloadDetailSelection {
+        self.payload_detail_selection
+    }
+    
     pub fn format_payload_content(&self, payload: &str) -> Vec<String> {
         // Try to parse payload as JSON for formatting
         match serde_json::from_str::<serde_json::Value>(payload) {
@@ -1220,6 +1363,140 @@ impl App {
                 // Not JSON, display as plain text
                 payload.lines().map(|line| line.to_string()).collect()
             }
+        }
+    }
+    
+    pub fn get_clipboard_content(&self) -> Result<String> {
+        #[cfg(windows)]
+        {
+            use std::ffi::OsString;
+            use std::os::windows::ffi::OsStringExt;
+            use winapi::um::winuser::{OpenClipboard, GetClipboardData, CloseClipboard};
+            use winapi::um::winbase::GlobalLock;
+            use winapi::shared::minwindef::HGLOBAL;
+            use winapi::um::winnt::HANDLE;
+            use winapi::um::winuser::CF_UNICODETEXT;
+            
+            unsafe {
+                if OpenClipboard(std::ptr::null_mut()) == 0 {
+                    return Err(anyhow::anyhow!("Failed to open clipboard"));
+                }
+                
+                let handle: HANDLE = GetClipboardData(CF_UNICODETEXT);
+                if handle.is_null() {
+                    CloseClipboard();
+                    return Err(anyhow::anyhow!("No text data in clipboard"));
+                }
+                
+                let data_ptr = GlobalLock(handle as HGLOBAL);
+                if data_ptr.is_null() {
+                    CloseClipboard();
+                    return Err(anyhow::anyhow!("Failed to lock clipboard data"));
+                }
+                
+                // Convert wide string to Rust string
+                let wide_ptr = data_ptr as *const u16;
+                let mut len = 0;
+                while *wide_ptr.offset(len) != 0 {
+                    len += 1;
+                }
+                
+                let wide_slice = std::slice::from_raw_parts(wide_ptr, len as usize);
+                let os_string = OsString::from_wide(wide_slice);
+                let result = os_string.to_string_lossy().to_string();
+                
+                CloseClipboard();
+                Ok(result)
+            }
+        }
+        
+        #[cfg(not(windows))]
+        {
+            // For non-Windows platforms, return empty string for now
+            // TODO: Implement clipboard support for other platforms
+            Ok(String::new())
+        }
+    }
+    
+    pub fn copy_to_clipboard(&self, text: &str) -> Result<()> {
+        tracing::info!("copy_to_clipboard called with text length: {} chars", text.len());
+        tracing::debug!("Text to copy: {}", text);
+        
+        #[cfg(windows)]
+        {
+            use std::ffi::OsString;
+            use std::os::windows::ffi::{OsStringExt, OsStrExt};
+            use winapi::um::winuser::{OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard};
+            use winapi::um::winbase::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+            use winapi::um::winuser::CF_UNICODETEXT;
+            
+            tracing::info!("Starting Windows clipboard operation");
+            unsafe {
+                tracing::debug!("Opening clipboard...");
+                if OpenClipboard(std::ptr::null_mut()) == 0 {
+                    tracing::error!("Failed to open clipboard");
+                    return Err(anyhow::anyhow!("Failed to open clipboard"));
+                }
+                tracing::debug!("Clipboard opened successfully");
+                
+                tracing::debug!("Emptying clipboard...");
+                if EmptyClipboard() == 0 {
+                    CloseClipboard();
+                    tracing::error!("Failed to empty clipboard");
+                    return Err(anyhow::anyhow!("Failed to empty clipboard"));
+                }
+                tracing::debug!("Clipboard emptied successfully");
+                
+                // Convert text to wide string
+                tracing::debug!("Converting text to wide string...");
+                let wide_text: Vec<u16> = OsString::from(text).encode_wide().chain(std::iter::once(0)).collect();
+                let len = wide_text.len() * 2; // 2 bytes per wide char
+                tracing::debug!("Wide string length: {} chars, {} bytes", wide_text.len(), len);
+                
+                tracing::debug!("Allocating clipboard memory...");
+                let h_mem = GlobalAlloc(GMEM_MOVEABLE, len);
+                if h_mem.is_null() {
+                    CloseClipboard();
+                    tracing::error!("Failed to allocate clipboard memory");
+                    return Err(anyhow::anyhow!("Failed to allocate clipboard memory"));
+                }
+                tracing::debug!("Memory allocated successfully");
+                
+                tracing::debug!("Locking memory...");
+                let mem_ptr = GlobalLock(h_mem);
+                if mem_ptr.is_null() {
+                    CloseClipboard();
+                    tracing::error!("Failed to lock clipboard memory");
+                    return Err(anyhow::anyhow!("Failed to lock clipboard memory"));
+                }
+                tracing::debug!("Memory locked successfully");
+                
+                tracing::debug!("Copying data to clipboard memory...");
+                std::ptr::copy_nonoverlapping(wide_text.as_ptr(), mem_ptr as *mut u16, wide_text.len());
+                GlobalUnlock(h_mem);
+                tracing::debug!("Data copied and memory unlocked");
+                
+                tracing::debug!("Setting clipboard data...");
+                if SetClipboardData(CF_UNICODETEXT, h_mem).is_null() {
+                    CloseClipboard();
+                    tracing::error!("Failed to set clipboard data");
+                    return Err(anyhow::anyhow!("Failed to set clipboard data"));
+                }
+                tracing::debug!("Clipboard data set successfully");
+                
+                tracing::debug!("Closing clipboard...");
+                CloseClipboard();
+                tracing::info!("Clipboard operation completed successfully");
+                Ok(())
+            }
+        }
+        
+        #[cfg(not(windows))]
+        {
+            // For non-Windows platforms, just log for now
+            // TODO: Implement clipboard support for other platforms
+            tracing::info!("Would copy to clipboard: {}", text);
+            Ok(())
         }
     }
     
