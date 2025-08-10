@@ -17,6 +17,7 @@ pub struct TopicListState {
     pub selected_index: usize,
     pub scroll_offset: usize,
     pub visible_rows: usize,
+    pub delete_confirmation: bool,
 }
 
 impl Default for TopicListState {
@@ -26,6 +27,7 @@ impl Default for TopicListState {
             selected_index: 0,
             scroll_offset: 0,
             visible_rows: 10,
+            delete_confirmation: false,
         }
     }
 }
@@ -230,6 +232,7 @@ impl TopicListView {
                 stdout.queue(Print("│"))?;
             }
         } else {
+            tracing::info!("Rendering {} topics, delete_confirmation state: {}", state.topics.len(), state.delete_confirmation);
             for (display_index, topic_index) in (state.scroll_offset..).enumerate() {
                 if display_index >= available_list_height {
                     break;
@@ -244,18 +247,27 @@ impl TopicListView {
                 // Render row with borders
                 if let Some(topic) = state.topics.get(topic_index) {
                     let is_selected = topic_index == state.selected_index;
+                    tracing::info!("Rendering topic {} at index {}, is_selected: {}, delete_confirmation: {}", 
+                                   topic.topic, topic_index, is_selected, state.delete_confirmation);
                     
                     stdout.queue(Print("│"))?;
                     
                     if is_selected {
                         stdout.queue(SetBackgroundColor(Color::Blue))?;
                         stdout.queue(SetForegroundColor(Color::White))?;
-                    }
-                    
-                    Self::render_topic_row_with_border(&mut stdout, topic, terminal_width)?;
-                    
-                    if is_selected {
+                        
+                        // 如果正在等待刪除確認，修改顯示的內容
+                        if state.delete_confirmation {
+                            tracing::info!("Displaying delete confirmation prompt for selected topic: {}", topic.topic);
+                            Self::render_topic_row_with_confirmation(&mut stdout, topic, terminal_width)?;
+                        } else {
+                            tracing::info!("No delete confirmation for selected topic: {}", topic.topic);
+                            Self::render_topic_row_with_border(&mut stdout, topic, terminal_width)?;
+                        }
+                        
                         stdout.queue(ResetColor)?;
+                    } else {
+                        Self::render_topic_row_with_border(&mut stdout, topic, terminal_width)?;
                     }
                     
                     stdout.queue(Print("│"))?;
@@ -315,6 +327,28 @@ impl TopicListView {
         Self::render_with_clear(state, start_row, end_row, terminal_width, true)
     }
     
+    fn render_topic_row_with_confirmation<W: Write>(
+        writer: &mut W,
+        topic: &TopicStat,
+        terminal_width: u16
+    ) -> Result<()> {
+        // Show confirmation prompt instead of normal row content
+        let confirmation_msg = format!("刪除 \"{}\"? 再按一次Delete確認刪除", topic.topic);
+        let max_width = terminal_width.saturating_sub(3) as usize;
+        
+        let padded_msg = if confirmation_msg.len() > max_width {
+            format!("{}", &confirmation_msg[..max_width])
+        } else {
+            format!("{:<width$}", confirmation_msg, width = max_width)
+        };
+        
+        writer.queue(SetForegroundColor(Color::Red))?;
+        writer.queue(Print(&padded_msg))?;
+        writer.queue(ResetColor)?;
+        
+        Ok(())
+    }
+
     fn render_topic_row_with_border<W: Write>(
         writer: &mut W,
         topic: &TopicStat,

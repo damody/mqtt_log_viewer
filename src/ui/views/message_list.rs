@@ -26,6 +26,7 @@ pub struct MessageListState {
     pub is_editing: bool,
     pub filter_error: Option<String>, // 用於顯示過濾器錯誤
     pub cursor_position: usize, // 當前遊標在輸入欄位中的位置
+    pub delete_confirmation: bool, // 刪除確認標誌
 }
 
 impl MessageListState {
@@ -46,6 +47,7 @@ impl MessageListState {
             is_editing: false,
             filter_error: None,
             cursor_position: 0,
+            delete_confirmation: false,
         }
     }
     
@@ -118,6 +120,7 @@ impl MessageListState {
     }
     
     pub async fn move_up_with_pagination(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        self.delete_confirmation = false; // 清除刪除確認狀態
         if self.selected_index > 0 {
             self.selected_index -= 1;
         } else if self.page > 1 {
@@ -139,6 +142,7 @@ impl MessageListState {
     }
     
     pub async fn move_down_with_pagination(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        self.delete_confirmation = false; // 清除刪除確認狀態
         tracing::info!("move_down_with_pagination {} {}", self.selected_index, self.messages.len().saturating_sub(1));
         if self.selected_index < self.messages.len().saturating_sub(1) {
             self.selected_index += 1;

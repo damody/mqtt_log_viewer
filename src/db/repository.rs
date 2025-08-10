@@ -349,4 +349,53 @@ impl MessageRepository {
         // For now, return a default size - will implement proper size calculation later
         Ok(0)
     }
+    
+    /// 刪除指定topic的所有訊息
+    pub async fn delete_messages_by_topic(&self, topic: &str) -> Result<i64> {
+        let sql = "DELETE FROM messages WHERE topic = ?";
+        let args = vec![rbs::to_value(topic)?];
+        
+        let result = self.rb.exec(sql, args).await?;
+        let affected_rows = result.rows_affected;
+        
+        info!("Deleted {} messages for topic: {}", affected_rows, topic);
+        Ok(affected_rows as i64)
+    }
+    
+    /// 刪除指定ID的單筆訊息
+    pub async fn delete_message_by_id(&self, id: i64) -> Result<bool> {
+        let sql = "DELETE FROM messages WHERE id = ?";
+        let args = vec![rbs::to_value(id)?];
+        
+        let result = self.rb.exec(sql, args).await?;
+        let affected_rows = result.rows_affected;
+        
+        if affected_rows > 0 {
+            info!("Deleted message with id: {}", id);
+            Ok(true)
+        } else {
+            warn!("No message found with id: {}", id);
+            Ok(false)
+        }
+    }
+    
+    /// 刪除指定topic和timestamp的訊息（用於沒有ID的情況）
+    pub async fn delete_message_by_topic_and_timestamp(&self, topic: &str, timestamp: &DateTime<Utc>) -> Result<bool> {
+        let sql = "DELETE FROM messages WHERE topic = ? AND timestamp = ?";
+        let args = vec![
+            rbs::to_value(topic)?,
+            rbs::to_value(timestamp.to_rfc3339())?
+        ];
+        
+        let result = self.rb.exec(sql, args).await?;
+        let affected_rows = result.rows_affected;
+        
+        if affected_rows > 0 {
+            info!("Deleted message for topic: {} at timestamp: {}", topic, timestamp);
+            Ok(true)
+        } else {
+            warn!("No message found for topic: {} at timestamp: {}", topic, timestamp);
+            Ok(false)
+        }
+    }
 }

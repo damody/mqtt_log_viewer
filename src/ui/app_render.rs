@@ -508,20 +508,37 @@ impl App {
                     stdout.queue(Print("  "))?;
                 }
                 
-                // Format timestamp (HH:MM:SS)
-                let time_str = msg.timestamp.format("%H:%M:%S").to_string();
-                stdout.queue(Print(&format!("{:<10}", time_str)))?;
-                stdout.queue(Print(" │ "))?;
-                
-                // Truncate payload if too long
-                let max_payload_width = terminal_width.saturating_sub(20);
-                let payload_display = if msg.payload.len() > max_payload_width {
-                    format!("{}...", &msg.payload[..max_payload_width.saturating_sub(3)])
+                // Check if this is the selected row and we're in delete confirmation mode
+                if i as usize == selected_index && message_state.delete_confirmation {
+                    // Show delete confirmation prompt instead of normal content
+                    let confirmation_msg = format!("刪除此訊息? 再按一次Delete確認刪除");
+                    let max_width = terminal_width.saturating_sub(20);
+                    let padded_msg = if confirmation_msg.len() > max_width {
+                        format!("{}", &confirmation_msg[..max_width])
+                    } else {
+                        format!("{:<width$}", confirmation_msg, width = max_width)
+                    };
+                    
+                    stdout.queue(SetForegroundColor(crossterm::style::Color::Red))?;
+                    stdout.queue(Print(&padded_msg))?;
+                    stdout.queue(ResetColor)?;
                 } else {
-                    msg.payload.clone()
-                };
-                
-                stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
+                    // Normal message display
+                    // Format timestamp (HH:MM:SS)
+                    let time_str = msg.timestamp.format("%H:%M:%S").to_string();
+                    stdout.queue(Print(&format!("{:<10}", time_str)))?;
+                    stdout.queue(Print(" │ "))?;
+                    
+                    // Truncate payload if too long
+                    let max_payload_width = terminal_width.saturating_sub(20);
+                    let payload_display = if msg.payload.len() > max_payload_width {
+                        format!("{}...", &msg.payload[..max_payload_width.saturating_sub(3)])
+                    } else {
+                        msg.payload.clone()
+                    };
+                    
+                    stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
+                }
                 
                 if i as usize == selected_index {
                     stdout.queue(ResetColor)?;

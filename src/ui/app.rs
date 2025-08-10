@@ -258,7 +258,6 @@ impl App {
                 }
                 
                 if self.is_key_just_pressed(0x25) { // VK_LEFT
-                    std::fs::write("debug_key.txt", "LEFT key detected via WinAPI!").ok();
                     tracing::debug!("LEFT key detected via Windows API");
                     if self.handle_event(AppEvent::NavigateLeft).await? {
                         break;
@@ -267,7 +266,6 @@ impl App {
                 }
                 
                 if self.is_key_just_pressed(0x27) { // VK_RIGHT
-                    std::fs::write("debug_key.txt", "RIGHT key detected via WinAPI!").ok();
                     tracing::debug!("RIGHT key detected via Windows API");
                     if self.handle_event(AppEvent::NavigateRight).await? {
                         break;
@@ -276,7 +274,6 @@ impl App {
                 }
                 
                 if self.is_key_just_pressed(0x24) { // VK_HOME
-                    std::fs::write("debug_key.txt", "HOME key detected via WinAPI!").ok();
                     tracing::debug!("HOME key detected via Windows API");
                     if self.handle_event(AppEvent::Home).await? {
                         break;
@@ -285,7 +282,6 @@ impl App {
                 }
                 
                 if self.is_key_just_pressed(0x23) { // VK_END
-                    std::fs::write("debug_key.txt", "END key detected via WinAPI!").ok();
                     tracing::debug!("END key detected via Windows API");
                     if self.handle_event(AppEvent::End).await? {
                         break;
@@ -309,8 +305,15 @@ impl App {
                     self.handle_key_release(crossterm::event::KeyCode::PageDown);
                 }
                 
+                if self.is_key_just_pressed(0x2E) { // VK_DELETE
+                    tracing::info!("DELETE key detected via Windows API");
+                    if self.handle_event(AppEvent::Delete).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
                 if self.is_key_just_pressed(0x0D) { // VK_RETURN (Enter)
-                    std::fs::write("debug_key.txt", "ENTER key detected via WinAPI!").ok();
                     tracing::debug!("ENTER key detected via Windows API");
                     if self.handle_event(AppEvent::Enter).await? {
                         break;
@@ -465,6 +468,15 @@ impl App {
                     self.handle_key_release(crossterm::event::KeyCode::PageDown);
                 }
                 
+                if self.is_key_just_pressed(0x2E) { // VK_DELETE
+                    std::fs::write("debug_key.txt", "DELETE key detected via WinAPI!").ok();
+                    tracing::info!("DELETE key detected via Windows API");
+                    if self.handle_event(AppEvent::Delete).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
                 if self.is_key_just_pressed(0x0D) { // VK_RETURN (Enter)
                     std::fs::write("debug_key.txt", "ENTER key detected via WinAPI!").ok();
                     tracing::debug!("ENTER key detected via Windows API");
@@ -522,6 +534,11 @@ impl App {
     
     async fn handle_event(&mut self, event: AppEvent) -> Result<bool> {
         tracing::debug!("handle_event called with: {:?}, current state: {:?}", event, self.state);
+        let is_delete = matches!(event, AppEvent::Delete);
+        if !is_delete {
+            self.message_list_state.delete_confirmation = false; // 清除刪除確認狀態
+            self.topic_list_state.delete_confirmation = false; // 清除刪除確認狀態
+        }
         match event {
             AppEvent::Quit => return Ok(true),
             
@@ -579,7 +596,7 @@ impl App {
             }
             return Ok(());
         }
-        
+
         tracing::debug!("Handling topic list event: {:?}", event);
         match event {
             AppEvent::Tab => {
@@ -603,8 +620,12 @@ impl App {
                 tracing::debug!("Navigate left - going back to previous layer");
                 self.navigate_back()?;
             },
-            AppEvent::PageUp => self.topic_list_state.page_up(),
-            AppEvent::PageDown => self.topic_list_state.page_down(),
+            AppEvent::PageUp => {
+                self.topic_list_state.page_up();
+            },
+            AppEvent::PageDown => {
+                self.topic_list_state.page_down();
+            },
             AppEvent::Home => {
                 tracing::debug!("Home key pressed in topic list - moving to top");
                 self.topic_list_state.move_to_top();
@@ -613,7 +634,50 @@ impl App {
                 tracing::debug!("End key pressed in topic list - moving to bottom");
                 self.topic_list_state.move_to_bottom();
             },
-            _ => {}
+            AppEvent::Delete => {
+                // 刪除選中的topic的所有記錄
+                if let Some(selected_topic) = self.topic_list_state.get_selected_topic() {
+                    let topic = selected_topic.topic.clone();
+                    tracing::info!("Delete key pressed - preparing to delete all messages for topic: {}", topic);
+                    tracing::info!("Current delete_confirmation state: {}", self.topic_list_state.delete_confirmation);
+                    
+                    // 顯示確認對話框（簡單實作：需要再按一次Delete確認）
+                    if self.topic_list_state.delete_confirmation {
+                        tracing::info!("Second Delete press detected - executing deletion for topic: {}", topic);
+                        // 執行刪除
+                        match self.repository.delete_messages_by_topic(&topic).await {
+                            Ok(deleted_count) => {
+                                tracing::info!("Successfully deleted {} messages for topic: {}", deleted_count, topic);
+                                // 重新載入資料
+                                self.refresh_data().await?;
+                                self.topic_list_state.delete_confirmation = false;
+                                tracing::info!("Delete confirmation state reset to false");
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to delete messages for topic {}: {}", topic, e);
+                                self.topic_list_state.delete_confirmation = false;
+                                tracing::info!("Delete confirmation state reset to false after error");
+                            }
+                        }
+                    } else {
+                        // 第一次按Delete，設定確認標誌
+                        self.topic_list_state.delete_confirmation = true;
+                        self.needs_full_redraw = true; // 強制重新渲染以顯示確認提示
+                        tracing::info!("First Delete press - setting confirmation flag to true for topic: {}", topic);
+                        tracing::info!("Forced full redraw to display confirmation prompt");
+                        tracing::info!("Press Delete again to confirm deletion of topic: {}", topic);
+                    }
+                } else {
+                    tracing::warn!("Delete key pressed but no topic selected");
+                }
+            },
+            _ => {
+                // 任何其他按鍵都清除刪除確認狀態
+                if self.topic_list_state.delete_confirmation {
+                    tracing::info!("Non-Delete key pressed, clearing delete confirmation state");
+                    self.topic_list_state.delete_confirmation = false;
+                }
+            }
         }
         
         Ok(())
@@ -624,7 +688,7 @@ impl App {
         if self.message_list_state.is_editing {
             return self.handle_message_list_filter_input(event).await;
         }
-        
+
         match event {
             AppEvent::Tab => {
                 tracing::debug!("Tab pressed - switching focus");
@@ -721,7 +785,61 @@ impl App {
                     self.message_list_state.move_to_bottom(&self.repository).await?;
                 }
             }
-            _ => {}
+            AppEvent::Delete => {
+                // 刪除選中的單筆訊息
+                if let Some(selected_msg) = self.message_list_state.get_selected_message() {
+                    let topic = selected_msg.topic.clone();
+                    let timestamp = selected_msg.timestamp.clone();
+                    let id = selected_msg.id;
+                    
+                    tracing::info!("Delete key pressed - preparing to delete message: topic={}, timestamp={}", topic, timestamp);
+                    tracing::info!("Current message delete_confirmation state: {}", self.message_list_state.delete_confirmation);
+                    
+                    // 顯示確認對話框（簡單實作：需要再按一次Delete確認）
+                    if self.message_list_state.delete_confirmation {
+                        tracing::info!("Second Delete press detected - executing message deletion: topic={}, timestamp={}", topic, timestamp);
+                        // 執行刪除
+                        let delete_result = if let Some(msg_id) = id {
+                            tracing::info!("Deleting message by ID: {}", msg_id);
+                            self.repository.delete_message_by_id(msg_id).await
+                        } else {
+                            tracing::info!("Deleting message by topic and timestamp: {} at {}", topic, timestamp);
+                            self.repository.delete_message_by_topic_and_timestamp(&topic, &timestamp).await
+                        };
+                        
+                        match delete_result {
+                            Ok(success) => {
+                                if success {
+                                    tracing::info!("Successfully deleted message: topic={}, timestamp={}", topic, timestamp);
+                                    // 重新載入當前頁面
+                                    self.message_list_state.load_messages(&self.repository).await?;
+                                } else {
+                                    tracing::info!("Message not found for deletion: topic={}, timestamp={}", topic, timestamp);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::info!("Failed to delete message: topic={}, timestamp={}, error={}", topic, timestamp, e);
+                            }
+                        }
+                        self.message_list_state.delete_confirmation = false; // 清除刪除確認狀態
+                    } else {
+                        // 第一次按Delete，設定確認標誌
+                        self.message_list_state.delete_confirmation = true;
+                        self.needs_full_redraw = true; // 強制重新渲染以顯示確認提示
+                        tracing::info!("First Delete press - setting message confirmation flag to true");
+                        tracing::info!("Forced full redraw to display message confirmation prompt");
+                        tracing::info!("Press Delete again to confirm message deletion");
+                    }
+                } else {
+                    tracing::warn!("Delete key pressed in MessageList but no message selected");
+                }
+            }
+            _ => {
+                // 任何其他按鍵都清除刪除確認狀態
+                if self.message_list_state.delete_confirmation {
+                    tracing::info!("Non-Delete key pressed in message list, clearing delete confirmation state");
+                }
+            }
         }
         Ok(())
     }
