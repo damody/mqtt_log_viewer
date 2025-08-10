@@ -1,6 +1,77 @@
 use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone)]
+pub enum AppEvent {
+    Quit,
+    Refresh,
+    NavigateUp,
+    NavigateDown,
+    NavigateLeft,
+    NavigateRight,
+    Enter,
+    Escape,
+    Filter,
+    JsonToggle,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    Help,
+    Copy,
+    Tab,
+    Input(char),
+    Backspace,
+    Delete,
+    Paste(String),
+}
+
+impl From<KeyEvent> for AppEvent {
+    fn from(key_event: KeyEvent) -> Self {
+        // 只處理按鍵按下事件，忽略按鍵釋放事件
+        if key_event.kind != KeyEventKind::Press {
+            return AppEvent::Input('\0'); // 忽略非按下事件
+        }
+        
+        match key_event.code {
+            KeyCode::F(5) => AppEvent::Refresh,
+            KeyCode::Char('/') => AppEvent::Filter,
+            KeyCode::F(2) => AppEvent::JsonToggle,
+            KeyCode::F(1) => AppEvent::Help,
+            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::ALT) => {
+                println!("Alt+C detected, generating Copy event");
+                tracing::info!("Alt+C key combination detected, generating Copy event");
+                AppEvent::Copy
+            },
+            KeyCode::Char('v') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                // 這裡我們先返回一個空的Paste事件，實際的剪貼簿內容需要在app.rs中獲取
+                AppEvent::Paste(String::new())
+            },
+            KeyCode::Tab => AppEvent::Tab,
+            KeyCode::Char(c) => AppEvent::Input(c),
+            KeyCode::Up => AppEvent::NavigateUp,
+            KeyCode::Down => AppEvent::NavigateDown,
+            KeyCode::Left => AppEvent::NavigateLeft,
+            KeyCode::Right => AppEvent::NavigateRight,
+            KeyCode::Enter => AppEvent::Enter,
+            KeyCode::Esc => AppEvent::Escape,
+            KeyCode::PageUp => AppEvent::PageUp,
+            KeyCode::PageDown => AppEvent::PageDown,
+            KeyCode::Home => {
+                tracing::debug!("Home key detected in event conversion");
+                AppEvent::Home
+            },
+            KeyCode::End => {
+                tracing::debug!("End key detected in event conversion");
+                AppEvent::End
+            },
+            KeyCode::Backspace => AppEvent::Backspace,
+            KeyCode::Delete => AppEvent::Delete,
+            _ => AppEvent::Input('\0'), // Ignore other keys
+        }
+    }
+}
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+    event::{self, Event, KeyCode, KeyEvent, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType},
     cursor::{Hide, Show, MoveTo},
     style::{Print, SetForegroundColor, ResetColor},
@@ -20,7 +91,6 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::db::{MessageRepository, FilterCriteria};
-use crate::ui::events::AppEvent;
 use crate::ui::widgets::{FilterState, FilterBar, StatusBarState, StatusBar, ViewType, ConnectionStatus};
 use crate::mqtt::MqttClient;
 use crate::ui::views::{TopicListState, TopicListView, MessageListState};
@@ -214,10 +284,10 @@ impl App {
                 self.update_connection_status_from_mqtt(*is_connected);
             }
             
-            // 每0.25秒刷新資料 (只在第一層)
+            // 每0.25秒刷新資料 (第一層和第二層)
             let now = Instant::now();
             if now.duration_since(last_refresh) >= self.refresh_interval 
-                && self.state == AppState::TopicList {
+                && (self.state == AppState::TopicList || self.state == AppState::MessageList) {
                 self.refresh_data().await?;
                 // 不強制完全重繪，讓增量渲染決定
                 self.render()?;
@@ -378,10 +448,10 @@ impl App {
         let exit_flag = Arc::new(AtomicBool::new(false));
         
         loop {
-            // 每0.25秒刷新資料 (只在第一層)
+            // 每0.25秒刷新資料 (第一層和第二層)
             let now = Instant::now();
             if now.duration_since(last_refresh) >= self.refresh_interval 
-                && self.state == AppState::TopicList {
+                && (self.state == AppState::TopicList || self.state == AppState::MessageList) {
                 self.refresh_data().await?;
                 // 不強制完全重繪，讓增量渲染決定
                 self.render()?;
@@ -1240,7 +1310,10 @@ impl App {
                 }
             }
             AppState::MessageList => {
-                // TODO: Refresh message list data
+                // 重新載入當前topic的訊息
+                tracing::debug!("refresh_data called in MessageList state");
+                self.message_list_state.load_messages(&self.repository).await?;
+                tracing::debug!("MessageList messages refreshed successfully");
             }
             _ => {}
         }
