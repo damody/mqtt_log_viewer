@@ -5,6 +5,8 @@ use rbatis::RBatis;
 use rbdc_sqlite::driver::SqliteDriver;
 use std::path::Path;
 use tracing::{info, warn, error};
+use rayon::prelude::*;
+use regex::Regex;
 
 #[derive(Clone)]
 pub struct MessageRepository {
@@ -72,16 +74,11 @@ impl MessageRepository {
         topic: &str,
         criteria: &FilterCriteria,
     ) -> Result<Vec<Message>> {
+        // First, get all messages for the topic (with time filters only)
         let mut sql = "SELECT id, topic, payload, timestamp, qos, retain, created_at FROM messages WHERE topic = ?".to_string();
         let mut args = vec![rbs::to_value(topic)?];
         
-        // Add payload filter if specified
-        if let Some(payload_regex) = &criteria.payload_regex {
-            sql.push_str(" AND payload REGEXP ?");
-            args.push(rbs::to_value(payload_regex)?);
-        }
-        
-        // Add time range filters
+        // Add time range filters (these stay in SQL for efficiency)
         if let Some(start_time) = &criteria.start_time {
             sql.push_str(" AND timestamp >= ?");
             args.push(rbs::to_value(start_time)?);
@@ -93,14 +90,6 @@ impl MessageRepository {
         }
         
         sql.push_str(" ORDER BY timestamp DESC");
-        
-        if let Some(limit) = criteria.limit {
-            sql.push_str(&format!(" LIMIT {}", limit));
-        }
-        
-        if let Some(offset) = criteria.offset {
-            sql.push_str(&format!(" OFFSET {}", offset));
-        }
         
         tracing::debug!("Executing SQL: {} with args: {:?}", sql, args);
         
@@ -168,37 +157,49 @@ impl MessageRepository {
             tracing::warn!("Query result is not an array: {:?}", result);
         }
         
-        tracing::debug!("Retrieved {} messages", messages.len());
+        tracing::debug!("Retrieved {} messages from database", messages.len());
+        
+        // Now apply payload regex filter using rayon parallel processing
+        if let Some(payload_regex) = &criteria.payload_regex {
+            match Regex::new(payload_regex) {
+                Ok(regex) => {
+                    tracing::info!("Applying regex filter: {}", payload_regex);
+                    
+                    messages = messages
+                        .into_par_iter()
+                        .filter(|msg| regex.is_match(&msg.payload))
+                        .collect();
+                    
+                    tracing::info!("After regex filter: {} messages", messages.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid regex pattern '{}': {}", payload_regex, e);
+                    // Don't filter if regex is invalid, return all messages
+                }
+            }
+        }
+        
+        // Apply limit and offset after filtering
+        if let Some(offset) = criteria.offset {
+            messages = messages.into_iter().skip(offset as usize).collect();
+        }
+        
+        if let Some(limit) = criteria.limit {
+            messages.truncate(limit as usize);
+        }
+        
+        tracing::debug!("Final result: {} messages", messages.len());
         Ok(messages)
     }
     
     pub async fn get_topic_stats(&self, criteria: &FilterCriteria) -> Result<Vec<TopicStat>> {
-        let mut sql = r#"
-            SELECT 
-                topic,
-                COUNT(*) as message_count,
-                MAX(timestamp) as last_message_time,
-                MIN(timestamp) as first_message_time,
-                (SELECT payload FROM messages m2 WHERE m2.topic = m1.topic ORDER BY timestamp DESC LIMIT 1) as latest_payload
-            FROM messages m1
-        "#.to_string();
+        // For topic stats, we need to get all messages first, then filter and aggregate
+        let mut sql = "SELECT topic, payload, timestamp FROM messages".to_string();
         
         let mut args = vec![];
         let mut where_clauses = vec![];
         
-        // Add topic filter if specified
-        if let Some(topic_regex) = &criteria.topic_regex {
-            where_clauses.push("topic REGEXP ?".to_string());
-            args.push(rbs::to_value(topic_regex)?);
-        }
-        
-        // Add payload filter if specified
-        if let Some(payload_regex) = &criteria.payload_regex {
-            where_clauses.push("payload REGEXP ?".to_string());
-            args.push(rbs::to_value(payload_regex)?);
-        }
-        
-        // Add time range filters
+        // Add time range filters (these stay in SQL for efficiency)
         if let Some(start_time) = &criteria.start_time {
             where_clauses.push("timestamp >= ?".to_string());
             args.push(rbs::to_value(start_time)?);
@@ -214,95 +215,112 @@ impl MessageRepository {
             sql.push_str(&where_clauses.join(" AND "));
         }
         
-        sql.push_str(" GROUP BY topic ORDER BY last_message_time DESC");
+        sql.push_str(" ORDER BY timestamp DESC");
         
+        tracing::debug!("Executing topic stats query: {}", sql);
+        
+        // Get all messages
+        let result = self.rb.query(&sql, args).await?;
+        let mut all_messages = Vec::new();
+        
+        if let rbs::Value::Array(rows) = result {
+            for row_value in rows {
+                if let rbs::Value::Map(row) = row_value {
+                    let topic_key = rbs::Value::String("topic".to_string());
+                    let payload_key = rbs::Value::String("payload".to_string());
+                    let timestamp_key = rbs::Value::String("timestamp".to_string());
+                    
+                    let topic = row.get(&topic_key).as_str().unwrap_or("").to_string();
+                    let payload = match row.get(&payload_key) {
+                        rbs::Value::String(s) => s.clone(),
+                        rbs::Value::Map(_) | rbs::Value::Array(_) => {
+                            serde_json::to_string(row.get(&payload_key)).unwrap_or_else(|_| "{}".to_string())
+                        }
+                        _ => row.get(&payload_key).as_str().unwrap_or("").to_string()
+                    };
+                    let timestamp_str = row.get(&timestamp_key).as_str().unwrap_or("");
+                    let timestamp = DateTime::parse_from_rfc3339(timestamp_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now());
+                    
+                    all_messages.push((topic, payload, timestamp));
+                }
+            }
+        }
+        
+        tracing::debug!("Retrieved {} messages for stats", all_messages.len());
+        
+        // Apply regex filters using rayon
+        if let Some(topic_regex) = &criteria.topic_regex {
+            match Regex::new(topic_regex) {
+                Ok(regex) => {
+                    all_messages = all_messages
+                        .into_par_iter()
+                        .filter(|(topic, _, _)| regex.is_match(topic))
+                        .collect();
+                    tracing::debug!("After topic regex filter: {} messages", all_messages.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid topic regex pattern '{}': {}", topic_regex, e);
+                }
+            }
+        }
+        
+        if let Some(payload_regex) = &criteria.payload_regex {
+            match Regex::new(payload_regex) {
+                Ok(regex) => {
+                    all_messages = all_messages
+                        .into_par_iter()
+                        .filter(|(_, payload, _)| regex.is_match(payload))
+                        .collect();
+                    tracing::debug!("After payload regex filter: {} messages", all_messages.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid payload regex pattern '{}': {}", payload_regex, e);
+                }
+            }
+        }
+        
+        // Group by topic and calculate stats
+        use std::collections::HashMap;
+        let mut topic_map: HashMap<String, Vec<(String, DateTime<Utc>)>> = HashMap::new();
+        
+        for (topic, payload, timestamp) in all_messages {
+            topic_map.entry(topic.clone())
+                .or_insert_with(Vec::new)
+                .push((payload, timestamp));
+        }
+        
+        let mut topic_stats: Vec<TopicStat> = topic_map
+            .into_par_iter()
+            .map(|(topic, messages)| {
+                let message_count = messages.len() as i64;
+                let last_message_time = messages.iter().map(|(_, t)| *t).max().unwrap_or_else(Utc::now);
+                let first_message_time = messages.iter().map(|(_, t)| *t).min().unwrap_or_else(Utc::now);
+                let latest_payload = messages.iter()
+                    .max_by_key(|(_, t)| *t)
+                    .map(|(p, _)| p.clone());
+                
+                TopicStat {
+                    topic,
+                    message_count,
+                    last_message_time,
+                    first_message_time,
+                    latest_payload,
+                }
+            })
+            .collect();
+        
+        // Sort by last message time descending
+        topic_stats.sort_by(|a, b| b.last_message_time.cmp(&a.last_message_time));
+        
+        // Apply limit if specified
         if let Some(limit) = criteria.limit {
-            sql.push_str(&format!(" LIMIT {}", limit));
+            topic_stats.truncate(limit as usize);
         }
         
-        tracing::debug!("Executing topic stats query");
-        
-        // Check if we have any messages at all
-        let count_sql = "SELECT COUNT(*) as total FROM messages";
-        let total_count: Result<i64, _> = self.rb.query_decode(&count_sql, vec![]).await;
-        match total_count {
-            Ok(count) => {
-                tracing::debug!("Total messages in database: {}", count);
-                if count == 0 {
-                    // No messages yet, return empty result
-                    return Ok(Vec::new());
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to count messages: {}", e);
-                return Ok(Vec::new());
-            }
-        }
-
-        // 執行實際的統計查詢
-        tracing::debug!("Executing full topic stats query: {}", sql);
-        
-        let result: Result<Vec<rbs::Value>, _> = self.rb.query_decode(&sql, args).await;
-        
-        match result {
-            Ok(rows) => {
-                let mut topic_stats = Vec::new();
-                
-                for row in rows {
-                    if let Ok(row_map) = rbs::from_value::<std::collections::HashMap<String, rbs::Value>>(row) {
-                        let topic = row_map.get("topic")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                            
-                        let message_count = row_map.get("message_count")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-                            
-                        let last_time_str = row_map.get("last_message_time")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                            
-                        let first_time_str = row_map.get("first_message_time")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                            
-                        let latest_payload = row_map.get("latest_payload")
-                            .and_then(|v| v.as_str().map(|s| s.to_string()));
-                        
-                        // 解析時間戳
-                        let last_message_time = chrono::DateTime::parse_from_rfc3339(last_time_str)
-                            .or_else(|_| {
-                                chrono::NaiveDateTime::parse_from_str(last_time_str, "%Y-%m-%d %H:%M:%S")
-                                    .map(|dt| dt.and_utc().into())
-                            })
-                            .unwrap_or_else(|_| chrono::Utc::now().into());
-                        
-                        let first_message_time = chrono::DateTime::parse_from_rfc3339(first_time_str)
-                            .or_else(|_| {
-                                chrono::NaiveDateTime::parse_from_str(first_time_str, "%Y-%m-%d %H:%M:%S")
-                                    .map(|dt| dt.and_utc().into())
-                            })
-                            .unwrap_or_else(|_| chrono::Utc::now().into());
-                        
-                        topic_stats.push(TopicStat {
-                            topic,
-                            message_count,
-                            last_message_time: last_message_time.with_timezone(&chrono::Utc),
-                            first_message_time: first_message_time.with_timezone(&chrono::Utc),
-                            latest_payload,
-                        });
-                    }
-                }
-                
-                tracing::debug!("Found {} topic stats", topic_stats.len());
-                Ok(topic_stats)
-            }
-            Err(e) => {
-                tracing::error!("Failed to execute topic stats query: {}", e);
-                Ok(Vec::new())
-            }
-        }
+        tracing::debug!("Found {} topic stats", topic_stats.len());
+        Ok(topic_stats)
     }
     
     pub async fn cleanup_old_messages(&self, days: u32) -> Result<u64> {

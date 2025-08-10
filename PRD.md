@@ -117,7 +117,7 @@ Status: 1,234 topics | 45,678 messages | Last: 2024-01-20 10:30:03
 │          │                                                            │
 └───────────────────────────────────────────────────────────────────────┘
 Page 1/25 | 1,024 messages | Selected: sensors/temp
-[←][ESC]back [f]ilter [Enter]view [↑↓]navigate [PgUp/PgDn]page [j]son [h]elp
+[←]back [f]ilter [Enter]view [↑↓]navigate [PgUp/PgDn]page [j]son [h]elp
 ```
 
 **功能特性**:

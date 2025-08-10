@@ -32,7 +32,16 @@
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/input\" -m '{\"\"test\"\": \"\"input functionality\"\", \"\"chars\"\": \"\"qwerty\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/json\" -m '{\"\"temperature\"\": 25.6, \"\"humidity\"\": 60, \"\"location\"\": \"\"office\"\", \"\"timestamp\"\": \"\"2025-08-10T00:59:00Z\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/time\" -m '{\"\"message\"\": \"\"Testing dual time display\"\", \"\"value\"\": 123}')",
-      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/pagination\" -m '{\"\"test\"\": \"\"pagination test\"\", \"\"message_id\"\": 1, \"\"content\"\": \"\"This is test message for pagination functionality\"\"}')"
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/pagination\" -m '{\"\"test\"\": \"\"pagination test\"\", \"\"message_id\"\": 1, \"\"content\"\": \"\"This is test message for pagination functionality\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/filter\" -m '{\"\"temperature\"\": 25.5, \"\"unit\"\": \"\"celsius\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/filter\" -m '{\"\"humidity\"\": 60, \"\"unit\"\": \"\"percent\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/filter\" -m '{\"\"pressure\"\": 1013, \"\"unit\"\": \"\"hPa\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/temperature\" -m '{\"\"value\"\": 23.5, \"\"unit\"\": \"\"celsius\"\", \"\"location\"\": \"\"living_room\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"sensors/humidity\" -m '{\"\"value\"\": 65, \"\"unit\"\": \"\"percent\"\", \"\"location\"\": \"\"bedroom\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"devices/status\" -m '{\"\"device_id\"\": \"\"esp32_01\"\", \"\"status\"\": \"\"online\"\", \"\"battery\"\": 85}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/navigation\" -m '{\"\"test\"\": \"\"navigation test\"\", \"\"message_id\"\": 1, \"\"content\"\": \"\"First test message\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/navigation\" -m '{\"\"test\"\": \"\"navigation test\"\", \"\"message_id\"\": 2, \"\"content\"\": \"\"Second test message\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/navigation\" -m '{\"\"test\"\": \"\"navigation test\"\", \"\"message_id\"\": 3, \"\"content\"\": \"\"Third test message for testing\"\"}')"
     ],
     "deny": []
   }

@@ -153,10 +153,10 @@ impl StatusBar {
                 "[/]filter [Enter]select [↑↓]navigate [←]back [F5]refresh [F1]help".to_string()
             }
             ViewType::MessageList(_) => {
-                "[←][ESC]back [/]filter [Enter]view [↑↓]navigate [F2]json [F1]help".to_string()
+                "[←]back [/]filter [Enter]view [↑↓]navigate [F2]json [F1]help".to_string()
             }
             ViewType::PayloadDetail(_, _) => {
-                "[←][ESC]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help".to_string()
+                "[←]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help".to_string()
             }
         };
     }

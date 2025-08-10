@@ -159,8 +159,8 @@ impl FilterBar {
             stdout.queue(Clear(ClearType::CurrentLine))?;
             stdout.queue(Print("│ Topic Filter: "))?;
             Self::render_field(&mut stdout, &state.topic_filter, state.active_field == FilterField::Topic && state.is_editing)?;
-            stdout.queue(Print(" [Apply] [Clear]"))?;
-            let padding = terminal_width.saturating_sub(48); // Estimate
+            stdout.queue(Print("]"))?;
+            let padding = terminal_width.saturating_sub(32); // Updated after removing buttons
             stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             stdout.queue(Print("│"))?;
         
@@ -169,8 +169,8 @@ impl FilterBar {
             stdout.queue(Clear(ClearType::CurrentLine))?;
             stdout.queue(Print("│ Payload Filter: "))?;
             Self::render_field(&mut stdout, &state.payload_filter, state.active_field == FilterField::Payload && state.is_editing)?;
-            stdout.queue(Print(" [Apply] [Clear]"))?;
-            let padding = terminal_width.saturating_sub(50); // Estimate
+            stdout.queue(Print("]"))?;
+            let padding = terminal_width.saturating_sub(34); // Updated after removing buttons
             stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             stdout.queue(Print("│"))?;
         
@@ -181,8 +181,8 @@ impl FilterBar {
             Self::render_field(&mut stdout, &state.start_time, state.active_field == FilterField::StartTime && state.is_editing)?;
             stdout.queue(Print(" To "))?;
             Self::render_field(&mut stdout, &state.end_time, state.active_field == FilterField::EndTime && state.is_editing)?;
-            stdout.queue(Print(" [Apply]"))?;
-            let padding = terminal_width.saturating_sub(55); // Estimate
+            stdout.queue(Print("]"))?;
+            let padding = terminal_width.saturating_sub(47); // Updated after removing buttons
             stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             stdout.queue(Print("│"))?;
         }
