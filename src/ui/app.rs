@@ -505,7 +505,12 @@ impl App {
     
     async fn handle_topic_list_event(&mut self, event: AppEvent) -> Result<()> {
         if self.filter_state.is_editing {
+            let should_apply_filter = matches!(event, AppEvent::Input(_) | AppEvent::Backspace);
             self.handle_filter_input(event);
+            // 即時應用第一層的過濾器
+            if should_apply_filter {
+                self.apply_filters().await?;
+            }
             return Ok(());
         }
         
@@ -570,9 +575,12 @@ impl App {
                     crate::ui::views::message_list::FocusTarget::PayloadFilter |
                     crate::ui::views::message_list::FocusTarget::TimeFilterFrom |
                     crate::ui::views::message_list::FocusTarget::TimeFilterTo => {
-                        // 在filter欄位按Enter應用過濾器
-                        self.message_list_state.stop_editing();
-                        self.apply_message_list_filters().await?;
+                        // 在filter欄位按Enter開始編輯（如果尚未編輯）或結束編輯
+                        if self.message_list_state.is_editing {
+                            self.message_list_state.stop_editing();
+                        } else {
+                            self.message_list_state.start_editing();
+                        }
                     }
                     crate::ui::views::message_list::FocusTarget::MessageList => {
                         // 導航到payload detail
@@ -585,34 +593,32 @@ impl App {
                 }
             }
             AppEvent::NavigateUp => {
-                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
-                    tracing::debug!("Navigate up in message list");
-                    let old_page = self.message_list_state.page;
-                    self.message_list_state.move_up_with_pagination(&self.repository).await?;
-                    if old_page != self.message_list_state.page {
-                        self.needs_full_redraw = true; // Force redraw after page change
-                    }
+                // 上方向鍵總是用於導航訊息，即使在編輯狀態下
+                tracing::debug!("Navigate up in message list");
+                let old_page = self.message_list_state.page;
+                self.message_list_state.move_up_with_pagination(&self.repository).await?;
+                if old_page != self.message_list_state.page {
+                    self.needs_full_redraw = true; // Force redraw after page change
                 }
             }
             AppEvent::NavigateDown => {
-                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
-                    tracing::debug!("Navigate down in message list");
-                    let old_page = self.message_list_state.page;
-                    self.message_list_state.move_down_with_pagination(&self.repository).await?;
-                    if old_page != self.message_list_state.page {
-                        self.needs_full_redraw = true; // Force redraw after page change
-                    }
+                // 下方向鍵總是用於導航訊息，即使在編輯狀態下
+                tracing::debug!("Navigate down in message list");
+                let old_page = self.message_list_state.page;
+                self.message_list_state.move_down_with_pagination(&self.repository).await?;
+                if old_page != self.message_list_state.page {
+                    self.needs_full_redraw = true; // Force redraw after page change
                 }
             }
             AppEvent::PageUp => {
-                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
-                    self.message_list_state.page_up(&self.repository).await?;
-                }
+                // PageUp總是用於翻頁，即使在編輯狀態下
+                self.message_list_state.page_up(&self.repository).await?;
+                self.needs_full_redraw = true; // Force redraw after page change
             }
             AppEvent::PageDown => {
-                if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
-                    self.message_list_state.page_down(&self.repository).await?;
-                }
+                // PageDown總是用於翻頁，即使在編輯狀態下
+                self.message_list_state.page_down(&self.repository).await?;
+                self.needs_full_redraw = true; // Force redraw after page change
             }
             AppEvent::NavigateLeft => {
                 tracing::debug!("Navigate left from message list - returning to topic list");
@@ -652,23 +658,56 @@ impl App {
                 if let Some(input) = self.message_list_state.get_active_input_mut() {
                     input.push(c);
                     tracing::debug!("Added character '{}' to filter input", c);
+                    // 即時應用過濾器
+                    self.apply_message_list_filters().await?;
                 }
             }
             AppEvent::Backspace => {
                 if let Some(input) = self.message_list_state.get_active_input_mut() {
                     input.pop();
                     tracing::debug!("Removed character from filter input");
+                    // 即時應用過濾器
+                    self.apply_message_list_filters().await?;
                 }
             }
             AppEvent::Enter => {
-                tracing::debug!("Filter input submitted");
+                tracing::debug!("Filter input submitted - stop editing");
                 self.message_list_state.stop_editing();
-                // 應用過濾器並重新載入訊息
-                self.apply_message_list_filters().await?;
+                // Enter現在只是結束編輯，過濾已經即時應用了
             }
             AppEvent::Escape => {
                 tracing::debug!("Filter input cancelled");
                 self.message_list_state.stop_editing();
+            }
+            AppEvent::NavigateUp => {
+                // 在編輯模式下也允許導航訊息
+                tracing::debug!("Navigate up in message list (editing mode)");
+                let old_page = self.message_list_state.page;
+                self.message_list_state.move_up_with_pagination(&self.repository).await?;
+                if old_page != self.message_list_state.page {
+                    self.needs_full_redraw = true; // Force redraw after page change
+                }
+            }
+            AppEvent::NavigateDown => {
+                // 在編輯模式下也允許導航訊息
+                tracing::debug!("Navigate down in message list (editing mode)");
+                let old_page = self.message_list_state.page;
+                self.message_list_state.move_down_with_pagination(&self.repository).await?;
+                if old_page != self.message_list_state.page {
+                    self.needs_full_redraw = true; // Force redraw after page change
+                }
+            }
+            AppEvent::PageUp => {
+                // 在編輯模式下也允許翻頁
+                tracing::debug!("Page up in message list (editing mode)");
+                self.message_list_state.page_up(&self.repository).await?;
+                self.needs_full_redraw = true; // Force redraw after page change
+            }
+            AppEvent::PageDown => {
+                // 在編輯模式下也允許翻頁
+                tracing::debug!("Page down in message list (editing mode)");
+                self.message_list_state.page_down(&self.repository).await?;
+                self.needs_full_redraw = true; // Force redraw after page change
             }
             _ => {}
         }
@@ -676,32 +715,56 @@ impl App {
     }
     
     async fn apply_message_list_filters(&mut self) -> Result<()> {
+        // 清除之前的錯誤
+        self.message_list_state.filter_error = None;
+        
         // 更新message list的filter criteria
         if !self.message_list_state.payload_filter_input.is_empty() {
-            self.message_list_state.filter.payload_regex = Some(self.message_list_state.payload_filter_input.clone());
+            // 驗證regex語法
+            if let Err(e) = regex::Regex::new(&self.message_list_state.payload_filter_input) {
+                self.message_list_state.filter_error = Some(format!("Regex error: {}", e));
+                // 清除無效的regex，避免在資料庫查詢時出錯
+                self.message_list_state.filter.payload_regex = None;
+                tracing::warn!("Invalid payload regex: {}", e);
+                return Ok(()); // 不繼續處理
+            } else {
+                self.message_list_state.filter.payload_regex = Some(self.message_list_state.payload_filter_input.clone());
+                tracing::info!("Setting payload_regex filter: {}", self.message_list_state.payload_filter_input);
+            }
         } else {
             self.message_list_state.filter.payload_regex = None;
+            tracing::info!("Clearing payload_regex filter");
         }
         
         // 處理時間過濾器
         if !self.message_list_state.time_from_input.is_empty() {
             if let Ok(parsed_time) = chrono::NaiveDateTime::parse_from_str(&self.message_list_state.time_from_input, "%Y-%m-%d %H:%M:%S") {
                 self.message_list_state.filter.start_time = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(parsed_time, chrono::Utc));
+            } else {
+                self.message_list_state.filter.start_time = None;
             }
+        } else {
+            self.message_list_state.filter.start_time = None;
         }
         
         if !self.message_list_state.time_to_input.is_empty() {
             if let Ok(parsed_time) = chrono::NaiveDateTime::parse_from_str(&self.message_list_state.time_to_input, "%Y-%m-%d %H:%M:%S") {
                 self.message_list_state.filter.end_time = Some(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(parsed_time, chrono::Utc));
+            } else {
+                self.message_list_state.filter.end_time = None;
             }
+        } else {
+            self.message_list_state.filter.end_time = None;
         }
+        
+        tracing::info!("Final filter state: {:?}", self.message_list_state.filter);
         
         // 重設到第一頁並重新載入訊息
         self.message_list_state.page = 1;
         self.message_list_state.selected_index = 0;
         self.message_list_state.load_messages(&self.repository).await?;
         
-        tracing::debug!("Applied message list filters and reloaded messages");
+        tracing::info!("Applied message list filters and reloaded messages");
         Ok(())
     }
 
@@ -1125,6 +1188,10 @@ impl App {
     
     pub fn get_message_list_cursor_position(&self) -> Option<(u16, u16)> {
         self.message_list_state.get_cursor_position()
+    }
+    
+    pub fn get_message_list_filter_error(&self) -> &Option<String> {
+        &self.message_list_state.filter_error
     }
     
     pub fn get_message_list_state(&self) -> &MessageListState {
