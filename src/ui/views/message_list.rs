@@ -36,12 +36,29 @@ impl MessageListState {
             filter: FilterCriteria::default(),
             total_count: 0,
             page: 1,
-            per_page: 100,
+            per_page: 10, // Default value, will be updated based on terminal size
             focus: FocusTarget::MessageList,
             payload_filter_input: String::new(),
             time_from_input: String::new(),
             time_to_input: String::new(),
             is_editing: false,
+        }
+    }
+    
+    pub fn calculate_per_page(terminal_height: u16) -> usize {
+        let content_start_row = 5;  // Title, filters take 5 rows
+        let status_rows = 2;        // Status bar takes 2 rows  
+        let bottom_border = 1;      // Bottom border takes 1 row
+        let available_height = terminal_height.saturating_sub(content_start_row + status_rows + bottom_border);
+        available_height as usize
+    }
+    
+    pub fn update_per_page(&mut self, terminal_height: u16) {
+        let new_per_page = Self::calculate_per_page(terminal_height);
+        if new_per_page != self.per_page {
+            self.per_page = new_per_page;
+            // If the terminal size changed significantly, we might need to reload
+            // But let's keep it simple for now
         }
     }
     
@@ -65,7 +82,17 @@ impl MessageListState {
             filter.offset = Some(((self.page - 1) * self.per_page) as i64);
             
             self.messages = repo.get_messages_by_topic(topic, &filter).await?;
-            self.total_count = self.messages.len();
+            
+            // Get total count for this topic (without limit/offset)
+            let count_filter = FilterCriteria {
+                topic_regex: Some(format!("^{}$", regex::escape(topic))),
+                limit: None,
+                offset: None,
+                ..Default::default()
+            };
+            if let Ok(count_messages) = repo.get_messages_by_topic(topic, &count_filter).await {
+                self.total_count = count_messages.len();
+            }
             
             if self.selected_index >= self.messages.len() && !self.messages.is_empty() {
                 self.selected_index = self.messages.len() - 1;
@@ -80,10 +107,51 @@ impl MessageListState {
         }
     }
     
+    pub async fn move_up_with_pagination(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        } else if self.page > 1 {
+            // We're at the top of current page and there are previous pages
+            self.page -= 1;
+            self.load_messages(repo).await?;
+            // Move to the last item of the previous page
+            if !self.messages.is_empty() {
+                self.selected_index = self.messages.len() - 1;
+            }
+        }
+        Ok(())
+    }
+    
     pub fn move_down(&mut self) {
         if self.selected_index < self.messages.len().saturating_sub(1) {
             self.selected_index += 1;
         }
+    }
+    
+    pub async fn move_down_with_pagination(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        tracing::info!("move_down_with_pagination {} {}", self.selected_index, self.messages.len().saturating_sub(1));
+        if self.selected_index < self.messages.len().saturating_sub(1) {
+            self.selected_index += 1;
+        } else {
+            // We're at the bottom of current page, check if there are more pages
+            let current_messages_end = self.page * self.per_page;
+            if current_messages_end < self.total_count {
+                // There are more messages, load next page
+                let current_page = self.page;
+                self.page += 1;
+                self.load_messages(repo).await?;
+                
+                if self.messages.is_empty() {
+                    // Failed to load next page, revert
+                    self.page = current_page;
+                    self.load_messages(repo).await?;
+                } else {
+                    // Successfully loaded next page, move to first item
+                    self.selected_index = 0;
+                }
+            }
+        }
+        Ok(())
     }
     
     pub async fn page_up(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {

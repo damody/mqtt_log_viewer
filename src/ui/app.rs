@@ -25,6 +25,7 @@ use crate::ui::widgets::{FilterState, FilterBar, StatusBarState, StatusBar, View
 use crate::mqtt::MqttClient;
 use crate::ui::views::{TopicListState, TopicListView, MessageListState};
 
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppState {
     TopicList,
@@ -249,22 +250,20 @@ impl App {
                     self.render()?;
                 }
                 
-                if self.is_key_just_pressed(0x21) { // VK_PRIOR (Page Up)
-                    std::fs::write("debug_key.txt", "PAGE UP key detected via WinAPI!").ok();
-                    tracing::debug!("PAGE UP key detected via Windows API");
-                    if self.handle_event(AppEvent::PageUp).await? {
+                if self.is_key_pressed(0x21) { // VK_PRIOR (Page Up) - use continuous detection
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::PageUp).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::PageUp) {
+                    self.handle_key_release(crossterm::event::KeyCode::PageUp);
                 }
                 
-                if self.is_key_just_pressed(0x22) { // VK_NEXT (Page Down)
-                    std::fs::write("debug_key.txt", "PAGE DOWN key detected via WinAPI!").ok();
-                    tracing::debug!("PAGE DOWN key detected via Windows API");
-                    if self.handle_event(AppEvent::PageDown).await? {
+                if self.is_key_pressed(0x22) { // VK_NEXT (Page Down) - use continuous detection
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::PageDown).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::PageDown) {
+                    self.handle_key_release(crossterm::event::KeyCode::PageDown);
                 }
                 
                 if self.is_key_just_pressed(0x0D) { // VK_RETURN (Enter)
@@ -389,22 +388,20 @@ impl App {
                     self.render()?;
                 }
                 
-                if self.is_key_just_pressed(0x21) { // VK_PRIOR (Page Up)
-                    std::fs::write("debug_key.txt", "PAGE UP key detected via WinAPI!").ok();
-                    tracing::debug!("PAGE UP key detected via Windows API");
-                    if self.handle_event(AppEvent::PageUp).await? {
+                if self.is_key_pressed(0x21) { // VK_PRIOR (Page Up) - use continuous detection
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::PageUp).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::PageUp) {
+                    self.handle_key_release(crossterm::event::KeyCode::PageUp);
                 }
                 
-                if self.is_key_just_pressed(0x22) { // VK_NEXT (Page Down)
-                    std::fs::write("debug_key.txt", "PAGE DOWN key detected via WinAPI!").ok();
-                    tracing::debug!("PAGE DOWN key detected via Windows API");
-                    if self.handle_event(AppEvent::PageDown).await? {
+                if self.is_key_pressed(0x22) { // VK_NEXT (Page Down) - use continuous detection
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::PageDown).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::PageDown) {
+                    self.handle_key_release(crossterm::event::KeyCode::PageDown);
                 }
                 
                 if self.is_key_just_pressed(0x0D) { // VK_RETURN (Enter)
@@ -590,13 +587,21 @@ impl App {
             AppEvent::NavigateUp => {
                 if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
                     tracing::debug!("Navigate up in message list");
-                    self.message_list_state.move_up();
+                    let old_page = self.message_list_state.page;
+                    self.message_list_state.move_up_with_pagination(&self.repository).await?;
+                    if old_page != self.message_list_state.page {
+                        self.needs_full_redraw = true; // Force redraw after page change
+                    }
                 }
             }
             AppEvent::NavigateDown => {
                 if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
                     tracing::debug!("Navigate down in message list");
-                    self.message_list_state.move_down();
+                    let old_page = self.message_list_state.page;
+                    self.message_list_state.move_down_with_pagination(&self.repository).await?;
+                    if old_page != self.message_list_state.page {
+                        self.needs_full_redraw = true; // Force redraw after page change
+                    }
                 }
             }
             AppEvent::PageUp => {
@@ -794,6 +799,8 @@ impl App {
                     
                     // Set topic and load messages
                     self.message_list_state.set_topic(selected_topic.topic.clone());
+                    // Update per_page based on current terminal size
+                    self.message_list_state.update_per_page(self.terminal_height);
                     self.message_list_state.load_messages(&self.repository).await?;
                     
                     self.state = AppState::MessageList;
@@ -862,547 +869,8 @@ impl App {
         
         criteria
     }
-    
-    fn render(&mut self) -> Result<()> {
-        info!("render() called - current state: {:?}", self.state);
-        // Update terminal size if needed
-        let (width, height) = size()?;
-        if width != self.terminal_width || height != self.terminal_height {
-            self.terminal_width = width;
-            self.terminal_height = height;
-            self.update_visible_rows();
-            self.needs_full_redraw = true;
-        }
         
-        // Only clear screen if full redraw is needed
-        if self.needs_full_redraw {
-            info!("Full redraw needed - clearing screen");
-            let mut stdout = stdout();
-            stdout.execute(Clear(ClearType::All))?;
-            stdout.execute(MoveTo(0, 0))?;
-        }
-        
-        match self.state {
-            AppState::TopicList => {
-                info!("Rendering TopicList");
-                self.render_topic_list_incremental()?;
-            },
-            AppState::MessageList => {
-                info!("Rendering MessageList");
-                self.render_message_list()?;
-            },
-            AppState::PayloadDetail => {
-                info!("Rendering PayloadDetail");
-                self.render_payload_detail()?;
-            },
-            _ => {
-                panic!("render_topic_list_incremental");
-            }
-        }
-        self.needs_full_redraw = false;
-        Ok(())
-    }
-    
-    fn render_topic_list_incremental(&mut self) -> Result<()> {
-        let filter_rows = 5;  // Filter takes 5 rows (title + connection + topic + payload + time)
-        let status_rows = 2;  // Status takes 2 rows
-        let available_height = self.terminal_height.saturating_sub(filter_rows + status_rows + 1);
-        
-        let force_redraw = self.needs_full_redraw;
-        // Check if filter state changed
-        let filter_changed = self.prev_filter_state.as_ref()
-            .map_or(true, |prev| !self.states_equal_filter(prev, &self.filter_state));
-        if force_redraw || filter_changed {
-            if force_redraw {
-                FilterBar::render(&self.filter_state, 0, self.terminal_width)?;
-            } else {
-                FilterBar::render_incremental(
-                    &self.filter_state, 
-                    self.prev_filter_state.as_ref(), 
-                    0, 
-                    self.terminal_width
-                )?;
-            }
-        }
-        
-        // Check if topic list changed
-        let topics_changed = self.prev_topic_list_state.as_ref()
-            .map_or(true, |prev| !self.states_equal_topics(prev, &self.topic_list_state));
-        
-        // 如果資料有變化就強制重繪主題列表
-        let force_topic_redraw = topics_changed;
-        
-        if force_redraw || topics_changed || force_topic_redraw {
-            let list_start_row = filter_rows;
-            let list_end_row = list_start_row + available_height;
-            
-            if force_redraw {
-                // Full redraw
-                TopicListView::render(
-                    &self.topic_list_state,
-                    list_start_row,
-                    list_end_row,
-                    self.terminal_width
-                )?;
-            } else {
-                // Incremental update
-                TopicListView::render_incremental(
-                    &self.topic_list_state,
-                    self.prev_topic_list_state.as_ref(),
-                    list_start_row,
-                    list_end_row,
-                    self.terminal_width
-                )?;
-            }
-        }
-        
-        // Check if status bar changed
-        let status_changed = self.prev_status_bar_state.as_ref()
-            .map_or(true, |prev| !self.states_equal_status(prev, &self.status_bar_state));
-        
-        if force_redraw || status_changed {
-            let status_start_row = self.terminal_height.saturating_sub(status_rows);
-            if force_redraw {
-                StatusBar::render(&self.status_bar_state, status_start_row, self.terminal_width)?;
-            } else {
-                StatusBar::render_incremental(
-                    &self.status_bar_state, 
-                    self.prev_status_bar_state.as_ref(), 
-                    status_start_row, 
-                    self.terminal_width
-                )?;
-            }
-        }
-        
-        // Position cursor for filter editing
-        if let Some((x, y)) = FilterBar::get_cursor_position(&self.filter_state, 0) {
-            let mut stdout = stdout();
-            stdout.execute(MoveTo(x, y))?;
-            stdout.execute(Show)?;
-        } else {
-            let mut stdout = stdout();
-            stdout.execute(Hide)?;
-        }
-        
-        // Update previous states for next comparison
-        self.prev_filter_state = Some(self.filter_state.clone());
-        self.prev_status_bar_state = Some(self.status_bar_state.clone());
-        self.prev_topic_list_state = Some(self.topic_list_state.clone());
-        
-        Ok(())
-    }
-    
-    fn render_topic_list(&mut self) -> Result<()> {
-        let filter_rows = 5;  // Filter takes 5 rows (title + connection + topic + payload + time)
-        let status_rows = 2;  // Status takes 2 rows
-        let available_height = self.terminal_height.saturating_sub(filter_rows + status_rows + 1);
-        
-        // Render filter bar
-        FilterBar::render(&self.filter_state, 0, self.terminal_width)?;
-        
-        // Render topic list
-        let list_start_row = filter_rows;
-        let list_end_row = list_start_row + available_height;
-        TopicListView::render(
-            &self.topic_list_state,
-            list_start_row,
-            list_end_row,
-            self.terminal_width
-        )?;
-        
-        // Render status bar
-        let status_start_row = self.terminal_height.saturating_sub(status_rows);
-        StatusBar::render(&self.status_bar_state, status_start_row, self.terminal_width)?;
-        
-        // Position cursor for filter editing
-        if let Some((x, y)) = FilterBar::get_cursor_position(&self.filter_state, 0) {
-            let mut stdout = stdout();
-            stdout.execute(MoveTo(x, y))?;
-            stdout.execute(Show)?;
-        } else {
-            let mut stdout = stdout();
-            stdout.execute(Hide)?;
-        }
-        
-        Ok(())
-    }
-    
-    fn render_message_list(&mut self) -> Result<()> {
-        info!("render_message_list() called - starting MessageList UI rendering");
-        let mut stdout = stdout();
-        // Always clear screen when entering message list (second layer)
-        stdout.execute(Clear(crossterm::terminal::ClearType::All))?;
-        stdout.execute(MoveTo(0, 0))?;
-        info!("Screen cleared and cursor moved to 0,0");
-        
-        let terminal_width: usize = self.terminal_width as usize;
-        
-        // Render title bar - Topic: xxx
-        stdout.queue(MoveTo(0, 0))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        if let Some(selected_topic) = self.topic_list_state.get_selected_topic() {
-            let title = format!("┌─ Topic: {} ", selected_topic.topic);
-            let padding = terminal_width.saturating_sub(title.len() + 1);
-            stdout.queue(Print(&title))?;
-            stdout.queue(Print(&"─".repeat(padding)))?;
-            stdout.queue(Print("┐"))?;
-        } else {
-            error!("No topic selected");
-        }
-        // Render payload filter line with focus indicator and content
-        stdout.queue(MoveTo(0, 1))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let payload_filter_text = if !self.message_list_state.payload_filter_input.is_empty() {
-            &self.message_list_state.payload_filter_input
-        } else if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
-            if self.message_list_state.is_editing {
-                "<<<EDITING>>>"
-            } else {
-                "<<<FOCUSED>>>"
-            }
-        } else {
-            "___________"
-        };
-        
-        if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
-            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
-        }
-        stdout.queue(Print(&format!("│ Payload Filter: [{}] [Apply] [Clear]", payload_filter_text)))?;
-        if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::PayloadFilter) {
-            stdout.queue(ResetColor)?;
-        }
-        let line_len = 23 + payload_filter_text.len() + 17; // "│ Payload Filter: [" + content + "] [Apply] [Clear]"
-        let padding = terminal_width.saturating_sub(line_len + 1);
-        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-        stdout.queue(Print("│"))?;
-        
-        // Render time filter line with focus indicators and content
-        stdout.queue(MoveTo(0, 2))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let focus = self.message_list_state.get_focus();
-        
-        let from_text = if !self.message_list_state.time_from_input.is_empty() {
-            &self.message_list_state.time_from_input
-        } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
-            if self.message_list_state.is_editing {
-                "<<<EDITING>>>"
-            } else {
-                "<<<FOCUS>>>"
-            }
-        } else {
-            "__________"
-        };
-        
-        let to_text = if !self.message_list_state.time_to_input.is_empty() {
-            &self.message_list_state.time_to_input
-        } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
-            if self.message_list_state.is_editing {
-                "<<<EDITING>>>"
-            } else {
-                "<<<FOCUS>>>"
-            }
-        } else {
-            "__________"
-        };
-        
-        stdout.queue(Print("│ Time: From ["))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
-            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
-        }
-        stdout.queue(Print(from_text))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
-            stdout.queue(ResetColor)?;
-        }
-        stdout.queue(Print("] To ["))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
-            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
-        }
-        stdout.queue(Print(to_text))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
-            stdout.queue(ResetColor)?;
-        }
-        stdout.queue(Print("] [Apply]"))?;
-        
-        let line_len = 16 + from_text.len() + 6 + to_text.len() + 9; // "│ Time: From [" + from + "] To [" + to + "] [Apply]"
-        let padding = terminal_width.saturating_sub(line_len + 1);
-        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-        stdout.queue(Print("│"))?;
-        
-        // Render separator line
-        stdout.queue(MoveTo(0, 3))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let separator = format!("├{:─<width$}┤", "─", width = terminal_width.saturating_sub(2));
-        stdout.queue(Print(&separator))?;
-        
-        // Render header
-        stdout.queue(MoveTo(0, 4))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("│ "))?;
-        let header = format!("{:<12} │ {:<50}", "Time", "Payload");
-        let padded_header = format!("{:<width$}", header, width = terminal_width.saturating_sub(3));
-        stdout.queue(Print(&padded_header))?;
-        stdout.queue(Print("│"))?;
-        
-        // Calculate content area
-        let content_start_row = 5;
-        let status_rows = 2;
-        let available_height = self.terminal_height.saturating_sub(content_start_row + status_rows + 1);
-        
-        // Render message list content
-        let messages = &self.message_list_state.messages;
-        let selected_index = self.message_list_state.selected_index;
-        
-        for i in 0..available_height {
-            let row = content_start_row + i as u16;
-            stdout.queue(MoveTo(0, row))?;
-            stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-            
-            stdout.queue(Print("│ "))?;
-            
-            if let Some(msg) = messages.get(i as usize) {
-                // Highlight selected row with focus indication
-                if i as usize == selected_index {
-                    let is_message_list_focused = matches!(self.message_list_state.get_focus(), 
-                        crate::ui::views::message_list::FocusTarget::MessageList);
-                    if is_message_list_focused {
-                        stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
-                        stdout.queue(Print(">>"))?;
-                    } else {
-                        stdout.queue(SetForegroundColor(crossterm::style::Color::DarkCyan))?;
-                        stdout.queue(Print("> "))?;
-                    }
-                } else {
-                    stdout.queue(Print("  "))?;
-                }
-                
-                // Format timestamp (HH:MM:SS)
-                let time_str = msg.timestamp.format("%H:%M:%S").to_string();
-                stdout.queue(Print(&format!("{:<10}", time_str)))?;
-                stdout.queue(Print(" │ "))?;
-                
-                // Truncate payload if too long
-                let max_payload_width = terminal_width.saturating_sub(20);
-                let payload_display = if msg.payload.len() > max_payload_width {
-                    format!("{}...", &msg.payload[..max_payload_width.saturating_sub(3)])
-                } else {
-                    msg.payload.clone()
-                };
-                
-                stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
-                
-                if i as usize == selected_index {
-                    stdout.queue(ResetColor)?;
-                }
-            } else if messages.is_empty() && i == 0 {
-                stdout.queue(SetForegroundColor(crossterm::style::Color::DarkGrey))?;
-                stdout.queue(Print("  No messages found for this topic"))?;
-                stdout.queue(ResetColor)?;
-                let padding = terminal_width.saturating_sub(37);
-                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-            } else {
-                let padding = terminal_width.saturating_sub(3);
-                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-            }
-            
-            stdout.queue(Print("│"))?;
-        }
-        
-        // Render bottom border
-        let bottom_row = self.terminal_height.saturating_sub(3);
-        stdout.queue(MoveTo(0, bottom_row))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let bottom_border = format!("└{:─<width$}┘", "─", width = terminal_width.saturating_sub(2));
-        stdout.queue(Print(&bottom_border))?;
-        
-        // Render status line
-        let status_start_row = self.terminal_height.saturating_sub(2);
-        stdout.queue(MoveTo(0, status_start_row))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("Status: "))?;
-        
-        let message_count = self.message_list_state.messages.len();
-        let current_page = self.message_list_state.page;
-        let total_pages = (self.message_list_state.total_count + self.message_list_state.per_page - 1) / self.message_list_state.per_page;
-        
-        if let Some(topic) = &self.message_list_state.current_topic {
-            stdout.queue(Print(format!("Page {}/{} | {} messages | Topic: {}", 
-                                     current_page, total_pages.max(1), message_count, topic)))?;
-        }
-        // Render help line
-        stdout.queue(MoveTo(0, status_start_row + 1))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←][ESC]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [F1]help"))?;
-        
-        // Position cursor for input if editing
-        if let Some((col, row)) = self.message_list_state.get_cursor_position() {
-            stdout.queue(MoveTo(col, row))?;
-        }
-        
-        stdout.flush()?;
-        info!("render_message_list() completed - MessageList UI should now be visible");
-        self.needs_full_redraw = false; // Reset the redraw flag after successful render
-        Ok(())
-    }
-    
-    fn render_payload_detail(&mut self) -> Result<()> {
-        info!("render_payload_detail() called - starting PayloadDetail UI rendering");
-        let mut stdout = stdout();
-        
-        // Always clear screen when entering payload detail (third layer)
-        stdout.execute(Clear(crossterm::terminal::ClearType::All))?;
-        stdout.execute(MoveTo(0, 0))?;
-        info!("Screen cleared and cursor moved to 0,0");
-        
-        let terminal_width: usize = self.terminal_width as usize;
-        
-        // Get selected message
-        let selected_message = match self.message_list_state.get_selected_message() {
-            Some(msg) => msg,
-            None => {
-                error!("No message selected for payload detail");
-                return Ok(());
-            }
-        };
-        
-        // Render title bar - Topic: xxx | Message Detail
-        stdout.queue(MoveTo(0, 0))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let title = format!("┌─ Message Detail: {} ", selected_message.topic);
-        let padding = terminal_width.saturating_sub(title.len() + 1);
-        stdout.queue(Print(&title))?;
-        stdout.queue(Print(&"─".repeat(padding)))?;
-        stdout.queue(Print("┐"))?;
-        
-        // Render metadata line 1 - UTC and Local time on same line
-        stdout.queue(MoveTo(0, 1))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let utc_str = selected_message.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
-        let local_time = selected_message.timestamp.with_timezone(&chrono::Local);
-        let local_str = local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string();
-        let time_display = format!("│ UTC: {} | Local: {}", utc_str, local_str);
-        stdout.queue(Print(&time_display))?;
-        let padding = terminal_width.saturating_sub(time_display.len() + 1);
-        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-        stdout.queue(Print("│"))?;
-        
-        // Render metadata line 2 - QoS and Retain
-        stdout.queue(MoveTo(0, 2))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print(&format!("│ QoS: {} | Retain: {}", selected_message.qos, selected_message.retain)))?;
-        let qos_retain_text = format!(" QoS: {} | Retain: {}", selected_message.qos, selected_message.retain);
-        let line_len = 1 + qos_retain_text.len(); // "│" + text
-        let padding = terminal_width.saturating_sub(line_len + 1);
-        stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-        stdout.queue(Print("│"))?;
-        
-        // Render separator line
-        stdout.queue(MoveTo(0, 3))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let separator = format!("├{:─<width$}┤", "─ Payload ", width = terminal_width.saturating_sub(2));
-        stdout.queue(Print(&separator))?;
-        
-        // Calculate content area
-        let content_start_row = 4;
-        let status_rows = 2;
-        let available_height = self.terminal_height.saturating_sub(content_start_row + status_rows + 1);
-        
-        // Try to parse payload as JSON for formatting
-        let payload_lines: Vec<String> = match serde_json::from_str::<serde_json::Value>(&selected_message.payload) {
-            Ok(json_value) => {
-                // Format JSON with proper indentation
-                match serde_json::to_string_pretty(&json_value) {
-                    Ok(pretty_json) => pretty_json.lines().map(|line| line.to_string()).collect(),
-                    Err(_) => selected_message.payload.lines().map(|line| line.to_string()).collect(),
-                }
-            }
-            Err(_) => {
-                // Not JSON, display as plain text
-                selected_message.payload.lines().map(|line| line.to_string()).collect()
-            }
-        };
-        
-        // Ensure scroll offset doesn't exceed content
-        let max_scroll = payload_lines.len().saturating_sub(available_height as usize);
-        if self.payload_detail_scroll_offset > max_scroll {
-            self.payload_detail_scroll_offset = max_scroll;
-        }
-        
-        // Render payload content with scroll offset
-        for i in 0..available_height {
-            let row = content_start_row + i as u16;
-            stdout.queue(MoveTo(0, row))?;
-            stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-            
-            stdout.queue(Print("│ "))?;
-            
-            let line_index = (i as usize) + self.payload_detail_scroll_offset;
-            if let Some(line) = payload_lines.get(line_index) {
-                // Truncate line if too long for terminal
-                let max_content_width = terminal_width.saturating_sub(4); // "│ " + " │"
-                if line.len() > max_content_width {
-                    let truncated = format!("{}...", &line[..max_content_width.saturating_sub(3)]);
-                    stdout.queue(Print(&truncated))?;
-                    let padding = max_content_width.saturating_sub(truncated.len());
-                    stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-                } else {
-                    stdout.queue(Print(line))?;
-                    let padding = max_content_width.saturating_sub(line.len());
-                    stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-                }
-            } else {
-                // Empty line
-                let padding = terminal_width.saturating_sub(3); // "│ " + "│"
-                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-            }
-            
-            stdout.queue(Print("│"))?;
-        }
-        
-        // Render bottom border
-        let bottom_row = content_start_row + available_height as u16;
-        stdout.queue(MoveTo(0, bottom_row))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let bottom_border = format!("└{:─<width$}┘", "", width = terminal_width.saturating_sub(2));
-        stdout.queue(Print(&bottom_border))?;
-        
-        // Render status lines
-        let status_start_row = self.terminal_height.saturating_sub(status_rows);
-        
-        // Render info line
-        stdout.queue(MoveTo(0, status_start_row))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let payload_size = selected_message.payload.len();
-        let line_count = payload_lines.len();
-        let scroll_info = if line_count > available_height as usize {
-            format!(" | Lines: {}-{}/{}", 
-                    self.payload_detail_scroll_offset + 1,
-                    std::cmp::min(self.payload_detail_scroll_offset + available_height as usize, line_count),
-                    line_count)
-        } else {
-            format!(" | Lines: {}", line_count)
-        };
-        stdout.queue(Print(format!("Payload: {} bytes{} | Topic: {}", 
-                                 payload_size, scroll_info, selected_message.topic)))?;
-        
-        // Render help line
-        stdout.queue(MoveTo(0, status_start_row + 1))?;
-        stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←][ESC]back [F2]json-depth [c]opy [↑↓]scroll [PgUp/PgDn]page [F1]help"))?;
-        
-        stdout.flush()?;
-        info!("render_payload_detail() completed - PayloadDetail UI should now be visible");
-        self.needs_full_redraw = false; // Reset the redraw flag after successful render
-        Ok(())
-    }
-    
-    fn get_payload_detail_page_size(&self) -> usize {
-        let content_start_row = 4;
-        let status_rows = 2;
-        let available_height = self.terminal_height.saturating_sub(content_start_row + status_rows + 1);
-        available_height as usize
-    }
-    
-    fn update_visible_rows(&mut self) {
+    pub fn update_visible_rows(&mut self) {
         let filter_rows = 5;
         let status_rows = 2;
         let header_rows = 2; // Header + separator
@@ -1410,6 +878,9 @@ impl App {
             .saturating_sub(filter_rows + status_rows + header_rows + 1);
         
         self.topic_list_state.set_visible_rows(available_height as usize);
+        
+        // Also update MessageList per_page when terminal size changes
+        self.message_list_state.update_per_page(self.terminal_height);
     }
     
     pub fn set_connection_status(&mut self, status: ConnectionStatus) {
@@ -1522,6 +993,8 @@ impl App {
             let event = match key {
                 crossterm::event::KeyCode::Up => AppEvent::NavigateUp,
                 crossterm::event::KeyCode::Down => AppEvent::NavigateDown,
+                crossterm::event::KeyCode::PageUp => AppEvent::PageUp,
+                crossterm::event::KeyCode::PageDown => AppEvent::PageDown,
                 _ => return Ok(false),
             };
             
@@ -1560,6 +1033,8 @@ impl App {
                     let event = match key {
                         crossterm::event::KeyCode::Up => AppEvent::NavigateUp,
                         crossterm::event::KeyCode::Down => AppEvent::NavigateDown,
+                        crossterm::event::KeyCode::PageUp => AppEvent::PageUp,
+                        crossterm::event::KeyCode::PageDown => AppEvent::PageDown,
                         _ => return Ok(()),
                     };
                     
@@ -1572,4 +1047,113 @@ impl App {
         
         Ok(())
     }
+    
+    // Public getter methods for render module
+    pub fn get_state(&self) -> AppState {
+        self.state
+    }
+    
+    pub fn get_terminal_size(&self) -> (u16, u16) {
+        (self.terminal_width, self.terminal_height)
+    }
+    
+    pub fn set_terminal_size(&mut self, width: u16, height: u16) {
+        self.terminal_width = width;
+        self.terminal_height = height;
+    }
+    
+    pub fn needs_full_redraw(&self) -> bool {
+        self.needs_full_redraw
+    }
+    
+    pub fn set_needs_full_redraw(&mut self, value: bool) {
+        self.needs_full_redraw = value;
+    }
+    
+    pub fn get_filter_state(&self) -> &FilterState {
+        &self.filter_state
+    }
+    
+    pub fn get_prev_filter_state(&self) -> Option<&FilterState> {
+        self.prev_filter_state.as_ref()
+    }
+    
+    pub fn get_topic_list_state(&self) -> &TopicListState {
+        &self.topic_list_state
+    }
+    
+    pub fn get_prev_topic_list_state(&self) -> Option<&TopicListState> {
+        self.prev_topic_list_state.as_ref()
+    }
+    
+    pub fn get_status_bar_state(&self) -> &StatusBarState {
+        &self.status_bar_state
+    }
+    
+    pub fn get_prev_status_bar_state(&self) -> Option<&StatusBarState> {
+        self.prev_status_bar_state.as_ref()
+    }
+    
+    pub fn has_filter_state_changed(&self) -> bool {
+        self.prev_filter_state.as_ref()
+            .map_or(true, |prev| !self.states_equal_filter(prev, &self.filter_state))
+    }
+    
+    pub fn has_topic_list_state_changed(&self) -> bool {
+        self.prev_topic_list_state.as_ref()
+            .map_or(true, |prev| !self.states_equal_topics(prev, &self.topic_list_state))
+    }
+    
+    pub fn has_status_bar_state_changed(&self) -> bool {
+        self.prev_status_bar_state.as_ref()
+            .map_or(true, |prev| !self.states_equal_status(prev, &self.status_bar_state))
+    }
+    
+    pub fn update_prev_states(&mut self) {
+        self.prev_filter_state = Some(self.filter_state.clone());
+        self.prev_status_bar_state = Some(self.status_bar_state.clone());
+        self.prev_topic_list_state = Some(self.topic_list_state.clone());
+    }
+    
+    pub fn get_selected_topic(&self) -> Option<&crate::db::TopicStat> {
+        self.topic_list_state.get_selected_topic()
+    }
+    
+    pub fn get_selected_message(&self) -> Option<&crate::db::Message> {
+        self.message_list_state.get_selected_message()
+    }
+    
+    pub fn get_message_list_cursor_position(&self) -> Option<(u16, u16)> {
+        self.message_list_state.get_cursor_position()
+    }
+    
+    pub fn get_message_list_state(&self) -> &MessageListState {
+        &self.message_list_state
+    }
+    
+    pub fn get_payload_detail_scroll_offset(&self) -> usize {
+        self.payload_detail_scroll_offset
+    }
+    
+    pub fn set_payload_detail_scroll_offset(&mut self, offset: usize) {
+        self.payload_detail_scroll_offset = offset;
+    }
+    
+    pub fn format_payload_content(&self, payload: &str) -> Vec<String> {
+        // Try to parse payload as JSON for formatting
+        match serde_json::from_str::<serde_json::Value>(payload) {
+            Ok(json_value) => {
+                // Format JSON with proper indentation
+                match serde_json::to_string_pretty(&json_value) {
+                    Ok(pretty_json) => pretty_json.lines().map(|line| line.to_string()).collect(),
+                    Err(_) => payload.lines().map(|line| line.to_string()).collect(),
+                }
+            }
+            Err(_) => {
+                // Not JSON, display as plain text
+                payload.lines().map(|line| line.to_string()).collect()
+            }
+        }
+    }
+    
 }

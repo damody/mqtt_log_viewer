@@ -31,7 +31,8 @@
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/input\" -m '{\"\"test\"\": \"\"input functionality\"\", \"\"chars\"\": \"\"frjh\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/input\" -m '{\"\"test\"\": \"\"input functionality\"\", \"\"chars\"\": \"\"qwerty\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/json\" -m '{\"\"temperature\"\": 25.6, \"\"humidity\"\": 60, \"\"location\"\": \"\"office\"\", \"\"timestamp\"\": \"\"2025-08-10T00:59:00Z\"\"}')",
-      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/time\" -m '{\"\"message\"\": \"\"Testing dual time display\"\", \"\"value\"\": 123}')"
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/time\" -m '{\"\"message\"\": \"\"Testing dual time display\"\", \"\"value\"\": 123}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/pagination\" -m '{\"\"test\"\": \"\"pagination test\"\", \"\"message_id\"\": 1, \"\"content\"\": \"\"This is test message for pagination functionality\"\"}')"
     ],
     "deny": []
   }
