@@ -145,11 +145,21 @@ impl App {
     
     fn render_message_list(&mut self) -> Result<()> {
         info!("render_message_list() called - starting MessageList UI rendering");
+        self.render_message_list_incremental()?;
+        info!("render_message_list() completed - MessageList UI should now be visible");
+        self.set_needs_full_redraw(false); // Reset the redraw flag after successful render
+        Ok(())
+    }
+    
+    fn render_message_list_incremental(&mut self) -> Result<()> {
         let mut stdout = stdout();
-        // Always clear screen when entering message list (second layer)
-        stdout.execute(Clear(crossterm::terminal::ClearType::All))?;
-        stdout.execute(MoveTo(0, 0))?;
-        info!("Screen cleared and cursor moved to 0,0");
+        
+        // Only clear screen on full redraw (like when entering message list)
+        if self.needs_full_redraw() {
+            stdout.execute(Clear(crossterm::terminal::ClearType::All))?;
+            stdout.execute(MoveTo(0, 0))?;
+            info!("Screen cleared and cursor moved to 0,0");
+        }
         
         let (terminal_width, terminal_height) = self.get_terminal_size();
         let terminal_width: usize = terminal_width as usize;
@@ -218,8 +228,6 @@ impl App {
         }
         
         stdout.flush()?;
-        info!("render_message_list() completed - MessageList UI should now be visible");
-        self.set_needs_full_redraw(false); // Reset the redraw flag after successful render
         Ok(())
     }
     
