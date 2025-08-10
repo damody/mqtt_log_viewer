@@ -1,1 +1,1 @@
-ESC key detected via WinAPI!
+Ctrl+C detected via WinAPI!

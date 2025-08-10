@@ -34,6 +34,25 @@ pub enum AppState {
     Quit,
 }
 
+#[derive(Debug, Clone)]
+struct KeyRepeatState {
+    current_key: Option<crossterm::event::KeyCode>,
+    key_pressed_at: Option<Instant>,
+    last_repeat_at: Option<Instant>,
+    is_repeating: bool,
+}
+
+impl Default for KeyRepeatState {
+    fn default() -> Self {
+        Self {
+            current_key: None,
+            key_pressed_at: None,
+            last_repeat_at: None,
+            is_repeating: false,
+        }
+    }
+}
+
 pub struct App {
     state: AppState,
     config: Config,
@@ -44,6 +63,7 @@ pub struct App {
     status_bar_state: StatusBarState,
     topic_list_state: TopicListState,
     message_list_state: MessageListState,
+    payload_detail_scroll_offset: usize,
     
     // MQTT connection info
     mqtt_host: String,
@@ -66,6 +86,9 @@ pub struct App {
     // Windows API key state tracking
     #[cfg(windows)]
     last_key_state: std::collections::HashMap<i32, bool>,
+    
+    // Key repeat functionality for MessageList navigation
+    key_repeat_state: KeyRepeatState,
 }
 
 impl App {
@@ -81,6 +104,7 @@ impl App {
             status_bar_state: StatusBarState::default(),
             topic_list_state: TopicListState::default(),
             message_list_state: MessageListState::new(),
+            payload_detail_scroll_offset: 0,
             mqtt_host: config.mqtt.host.clone(),
             mqtt_port: config.mqtt.port,
             prev_filter_state: None,
@@ -93,6 +117,7 @@ impl App {
             needs_full_redraw: true,
             #[cfg(windows)]
             last_key_state: std::collections::HashMap::new(),
+            key_repeat_state: KeyRepeatState::default(),
         };
         
         // Set initial help text
@@ -173,6 +198,11 @@ impl App {
                 last_refresh = now;
             }
             
+            // Handle key repeat for MessageList navigation
+            if self.state == AppState::MessageList {
+                self.handle_key_repeat().await?;
+            }
+            
             // Windows API 直接按鍵檢測（邊沿觸發）
             #[cfg(windows)]
             {
@@ -184,23 +214,21 @@ impl App {
                 }
                 
                 
-                // 檢測上下箭頭鍵進行導航
-                if self.is_key_just_pressed(0x26) { // VK_UP
-                    std::fs::write("debug_key.txt", "UP key detected via WinAPI!").ok();
-                    tracing::debug!("UP key detected via Windows API");
-                    if self.handle_event(AppEvent::NavigateUp).await? {
+                // 檢測上下箭頭鍵進行導航 (支援重複按鍵)
+                if self.is_key_pressed(0x26) { // VK_UP - use continuous detection
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::Up).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::Up) {
+                    self.handle_key_release(crossterm::event::KeyCode::Up);
                 }
                 
-                if self.is_key_just_pressed(0x28) { // VK_DOWN
-                    std::fs::write("debug_key.txt", "DOWN key detected via WinAPI!").ok();
-                    tracing::debug!("DOWN key detected via Windows API");
-                    if self.handle_event(AppEvent::NavigateDown).await? {
+                if self.is_key_pressed(0x28) { // VK_DOWN - use continuous detection  
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::Down).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::Down) {
+                    self.handle_key_release(crossterm::event::KeyCode::Down);
                 }
                 
                 if self.is_key_just_pressed(0x25) { // VK_LEFT
@@ -326,23 +354,21 @@ impl App {
                 }
                 
                 
-                // 檢測上下箭頭鍵進行導航
-                if self.is_key_just_pressed(0x26) { // VK_UP
-                    std::fs::write("debug_key.txt", "UP key detected via WinAPI!").ok();
-                    tracing::debug!("UP key detected via Windows API");
-                    if self.handle_event(AppEvent::NavigateUp).await? {
+                // 檢測上下箭頭鍵進行導航 (支援重複按鍵)
+                if self.is_key_pressed(0x26) { // VK_UP - use continuous detection
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::Up).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::Up) {
+                    self.handle_key_release(crossterm::event::KeyCode::Up);
                 }
                 
-                if self.is_key_just_pressed(0x28) { // VK_DOWN
-                    std::fs::write("debug_key.txt", "DOWN key detected via WinAPI!").ok();
-                    tracing::debug!("DOWN key detected via Windows API");
-                    if self.handle_event(AppEvent::NavigateDown).await? {
+                if self.is_key_pressed(0x28) { // VK_DOWN - use continuous detection  
+                    if self.handle_key_repeat_start(crossterm::event::KeyCode::Down).await? {
                         break;
                     }
-                    self.render()?;
+                } else if self.key_repeat_state.current_key == Some(crossterm::event::KeyCode::Down) {
+                    self.handle_key_release(crossterm::event::KeyCode::Down);
                 }
                 
                 if self.is_key_just_pressed(0x25) { // VK_LEFT
@@ -555,6 +581,7 @@ impl App {
                         // 導航到payload detail
                         if let Some(_msg) = self.message_list_state.get_selected_message() {
                             self.state = AppState::PayloadDetail;
+                            self.payload_detail_scroll_offset = 0; // 重置滾動偏移
                             self.needs_full_redraw = true;
                         }
                     }
@@ -590,6 +617,7 @@ impl App {
                 if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
                     if let Some(_msg) = self.message_list_state.get_selected_message() {
                         self.state = AppState::PayloadDetail;
+                        self.payload_detail_scroll_offset = 0; // 重置滾動偏移
                         self.needs_full_redraw = true;
                     }
                 }
@@ -678,7 +706,23 @@ impl App {
                 tracing::debug!("Navigate left from payload detail - returning to message list");
                 self.navigate_back()?;
             }
-            // TODO: Implement other payload detail navigation
+            AppEvent::NavigateUp => {
+                if self.payload_detail_scroll_offset > 0 {
+                    self.payload_detail_scroll_offset -= 1;
+                }
+            }
+            AppEvent::NavigateDown => {
+                // We'll check max scroll in render function
+                self.payload_detail_scroll_offset += 1;
+            }
+            AppEvent::PageUp => {
+                let page_size = self.get_payload_detail_page_size();
+                self.payload_detail_scroll_offset = self.payload_detail_scroll_offset.saturating_sub(page_size);
+            }
+            AppEvent::PageDown => {
+                let page_size = self.get_payload_detail_page_size();
+                self.payload_detail_scroll_offset += page_size;
+            }
             _ => {}
         }
         Ok(())
@@ -732,6 +776,7 @@ impl App {
             }
             AppState::PayloadDetail => {
                 self.state = AppState::MessageList;
+                self.payload_detail_scroll_offset = 0; // 重置滾動偏移
                 self.needs_full_redraw = true; // 強制完全重繪
                 // TODO: Set message list help text
                 self.render()?;
@@ -768,6 +813,7 @@ impl App {
             AppState::MessageList => {
                 // TODO: Navigate to payload detail
                 self.state = AppState::PayloadDetail;
+                self.payload_detail_scroll_offset = 0; // 重置滾動偏移
                 self.needs_full_redraw = true; // 強制完全重繪
             }
             _ => {}
@@ -1227,17 +1273,19 @@ impl App {
         stdout.queue(Print(&"─".repeat(padding)))?;
         stdout.queue(Print("┐"))?;
         
-        // Render metadata line 1
+        // Render metadata line 1 - UTC and Local time on same line
         stdout.queue(MoveTo(0, 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        let timestamp_str = selected_message.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
-        stdout.queue(Print(&format!("│ Time: {}", timestamp_str)))?;
-        let line_len = 8 + timestamp_str.len(); // "│ Time: " + timestamp
-        let padding = terminal_width.saturating_sub(line_len + 1);
+        let utc_str = selected_message.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        let local_time = selected_message.timestamp.with_timezone(&chrono::Local);
+        let local_str = local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string();
+        let time_display = format!("│ UTC: {} | Local: {}", utc_str, local_str);
+        stdout.queue(Print(&time_display))?;
+        let padding = terminal_width.saturating_sub(time_display.len() + 1);
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
         
-        // Render metadata line 2
+        // Render metadata line 2 - QoS and Retain
         stdout.queue(MoveTo(0, 2))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
         stdout.queue(Print(&format!("│ QoS: {} | Retain: {}", selected_message.qos, selected_message.retain)))?;
@@ -1273,7 +1321,13 @@ impl App {
             }
         };
         
-        // Render payload content
+        // Ensure scroll offset doesn't exceed content
+        let max_scroll = payload_lines.len().saturating_sub(available_height as usize);
+        if self.payload_detail_scroll_offset > max_scroll {
+            self.payload_detail_scroll_offset = max_scroll;
+        }
+        
+        // Render payload content with scroll offset
         for i in 0..available_height {
             let row = content_start_row + i as u16;
             stdout.queue(MoveTo(0, row))?;
@@ -1281,7 +1335,8 @@ impl App {
             
             stdout.queue(Print("│ "))?;
             
-            if let Some(line) = payload_lines.get(i as usize) {
+            let line_index = (i as usize) + self.payload_detail_scroll_offset;
+            if let Some(line) = payload_lines.get(line_index) {
                 // Truncate line if too long for terminal
                 let max_content_width = terminal_width.saturating_sub(4); // "│ " + " │"
                 if line.len() > max_content_width {
@@ -1318,8 +1373,16 @@ impl App {
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
         let payload_size = selected_message.payload.len();
         let line_count = payload_lines.len();
-        stdout.queue(Print(format!("Payload: {} bytes | {} lines | Topic: {}", 
-                                 payload_size, line_count, selected_message.topic)))?;
+        let scroll_info = if line_count > available_height as usize {
+            format!(" | Lines: {}-{}/{}", 
+                    self.payload_detail_scroll_offset + 1,
+                    std::cmp::min(self.payload_detail_scroll_offset + available_height as usize, line_count),
+                    line_count)
+        } else {
+            format!(" | Lines: {}", line_count)
+        };
+        stdout.queue(Print(format!("Payload: {} bytes{} | Topic: {}", 
+                                 payload_size, scroll_info, selected_message.topic)))?;
         
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
@@ -1330,6 +1393,13 @@ impl App {
         info!("render_payload_detail() completed - PayloadDetail UI should now be visible");
         self.needs_full_redraw = false; // Reset the redraw flag after successful render
         Ok(())
+    }
+    
+    fn get_payload_detail_page_size(&self) -> usize {
+        let content_start_row = 4;
+        let status_rows = 2;
+        let available_height = self.terminal_height.saturating_sub(content_start_row + status_rows + 1);
+        available_height as usize
     }
     
     fn update_visible_rows(&mut self) {
@@ -1430,5 +1500,76 @@ impl App {
         
         // 只有從未按下到按下的狀態轉換才返回true（邊沿觸發）
         is_pressed && !was_pressed
+    }
+    
+    #[cfg(windows)]
+    fn is_key_pressed(&self, vk_code: i32) -> bool {
+        unsafe { GetAsyncKeyState(vk_code) & (0x8000u16 as i16) != 0 }
+    }
+    
+    // Key repeat handling methods
+    async fn handle_key_repeat_start(&mut self, key: crossterm::event::KeyCode) -> Result<bool> {
+        let now = Instant::now();
+        
+        // If this is a new key press
+        if self.key_repeat_state.current_key != Some(key) {
+            self.key_repeat_state.current_key = Some(key);
+            self.key_repeat_state.key_pressed_at = Some(now);
+            self.key_repeat_state.last_repeat_at = None;
+            self.key_repeat_state.is_repeating = false;
+            
+            // Handle the initial key press immediately
+            let event = match key {
+                crossterm::event::KeyCode::Up => AppEvent::NavigateUp,
+                crossterm::event::KeyCode::Down => AppEvent::NavigateDown,
+                _ => return Ok(false),
+            };
+            
+            if self.handle_event(event).await? {
+                return Ok(true);
+            }
+            self.render()?;
+        }
+        
+        Ok(false)
+    }
+    
+    fn handle_key_release(&mut self, key: crossterm::event::KeyCode) {
+        if self.key_repeat_state.current_key == Some(key) {
+            self.key_repeat_state.current_key = None;
+            self.key_repeat_state.key_pressed_at = None;
+            self.key_repeat_state.last_repeat_at = None;
+            self.key_repeat_state.is_repeating = false;
+        }
+    }
+    
+    async fn handle_key_repeat(&mut self) -> Result<()> {
+        let now = Instant::now();
+        
+        if let (Some(key), Some(pressed_at)) = (self.key_repeat_state.current_key, self.key_repeat_state.key_pressed_at) {
+            // Check if we should start repeating (after 0.5 seconds)
+            if !self.key_repeat_state.is_repeating && now.duration_since(pressed_at) >= Duration::from_millis(500) {
+                self.key_repeat_state.is_repeating = true;
+                self.key_repeat_state.last_repeat_at = Some(now);
+            }
+            
+            // If we're in repeat mode, check if it's time for the next repeat (every 0.2 seconds)
+            if self.key_repeat_state.is_repeating {
+                let last_repeat = self.key_repeat_state.last_repeat_at.unwrap_or(pressed_at);
+                if now.duration_since(last_repeat) >= Duration::from_millis(50) {
+                    let event = match key {
+                        crossterm::event::KeyCode::Up => AppEvent::NavigateUp,
+                        crossterm::event::KeyCode::Down => AppEvent::NavigateDown,
+                        _ => return Ok(()),
+                    };
+                    
+                    self.handle_event(event).await?;
+                    self.render()?;
+                    self.key_repeat_state.last_repeat_at = Some(now);
+                }
+            }
+        }
+        
+        Ok(())
     }
 }
