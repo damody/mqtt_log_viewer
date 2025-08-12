@@ -395,7 +395,7 @@ impl App {
                     "<<<FOCUSED>>>"
                 }
             } else {
-                "___________"
+                "___________________"
             };
             
             if is_payload_focused {
@@ -447,7 +447,7 @@ impl App {
                 "<<<FOCUS>>>"
             }
         } else {
-            "__________"
+            "___________________"
         };
         
         let to_text = if !message_state.time_to_input.is_empty() {
@@ -459,7 +459,7 @@ impl App {
                 "<<<FOCUS>>>"
             }
         } else {
-            "__________"
+            "___________________"
         };
         
         stdout.queue(Print("│ Time: From ["))?;

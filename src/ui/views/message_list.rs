@@ -31,6 +31,11 @@ pub struct MessageListState {
 
 impl MessageListState {
     pub fn new() -> Self {
+        use chrono::{Duration, Local};
+        let now = Local::now();
+        let yesterday = now - Duration::days(1);
+        let tomorrow = now + Duration::days(1);
+        
         Self {
             messages: Vec::new(),
             selected_index: 0,
@@ -42,8 +47,8 @@ impl MessageListState {
             per_page: 10, // Default value, will be updated based on terminal size
             focus: FocusTarget::MessageList,
             payload_filter_input: String::new(),
-            time_from_input: String::new(),
-            time_to_input: String::new(),
+            time_from_input: yesterday.format("%Y-%m-%d %H:%M:%S").to_string(),
+            time_to_input: tomorrow.format("%Y-%m-%d %H:%M:%S").to_string(),
             is_editing: false,
             filter_error: None,
             cursor_position: 0,
@@ -83,14 +88,50 @@ impl MessageListState {
         // Don't clear filters here - let the user decide when to clear them
     }
     
+    pub fn update_filter_from_inputs(&mut self) {
+        // 更新 payload 過濾
+        if !self.payload_filter_input.is_empty() {
+            self.filter.payload_regex = Some(self.payload_filter_input.clone());
+        } else {
+            self.filter.payload_regex = None;
+        }
+        
+        // 更新時間過濾 - From
+        if !self.time_from_input.is_empty() {
+            if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&self.time_from_input, "%Y-%m-%d %H:%M:%S") {
+                use chrono::{TimeZone, Local};
+                if let Some(dt) = Local.from_local_datetime(&naive_dt).single() {
+                    self.filter.start_time = Some(dt.with_timezone(&chrono::Utc));
+                }
+            }
+        } else {
+            self.filter.start_time = None;
+        }
+        
+        // 更新時間過濾 - To
+        if !self.time_to_input.is_empty() {
+            if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&self.time_to_input, "%Y-%m-%d %H:%M:%S") {
+                use chrono::{TimeZone, Local};
+                if let Some(dt) = Local.from_local_datetime(&naive_dt).single() {
+                    self.filter.end_time = Some(dt.with_timezone(&chrono::Utc));
+                }
+            }
+        } else {
+            self.filter.end_time = None;
+        }
+    }
+    
     pub async fn load_messages(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
-        if let Some(topic) = &self.current_topic {
+        if let Some(topic) = self.current_topic.clone() {
+            // 更新過濾條件，包含時間過濾
+            self.update_filter_from_inputs();
+            
             let mut filter = self.filter.clone();
             filter.limit = Some(self.per_page as i64);
             filter.offset = Some(((self.page - 1) * self.per_page) as i64);
             
             tracing::info!("load_messages filter: {:?}", filter);
-            self.messages = repo.get_messages_by_topic(topic, &filter).await?;
+            self.messages = repo.get_messages_by_topic(&topic, &filter).await?;
             
             // Get total count for this topic with same filters (but without limit/offset)
             let count_filter = FilterCriteria {
@@ -102,7 +143,7 @@ impl MessageListState {
                 offset: None,
             };
             tracing::info!("load_messages count_filter: {:?}", count_filter);
-            if let Ok(count_messages) = repo.get_messages_by_topic(topic, &count_filter).await {
+            if let Ok(count_messages) = repo.get_messages_by_topic(&topic, &count_filter).await {
                 self.total_count = count_messages.len();
             }
             

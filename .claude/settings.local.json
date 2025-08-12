@@ -47,7 +47,9 @@
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/delete\" -m '{\"\"test\"\": \"\"delete functionality\"\", \"\"message_id\"\": 2}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/delete_detail\" -m '{\"\"test\"\": \"\"message level delete\"\", \"\"id\"\": 1}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/message_delete\" -m '{\"\"test\"\": \"\"message delete test\"\", \"\"id\"\": 1, \"\"content\"\": \"\"This message will be deleted\"\"}')",
-      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/message_delete\" -m '{\"\"test\"\": \"\"message delete test\"\", \"\"id\"\": 2, \"\"content\"\": \"\"Second message for testing\"\"}')"
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/message_delete\" -m '{\"\"test\"\": \"\"message delete test\"\", \"\"id\"\": 2, \"\"content\"\": \"\"Second message for testing\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/time_edit\" -m '{\"\"test\"\": \"\"from field debug\"\", \"\"timestamp\"\": \"\"2025-08-11T00:00:00Z\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/field_width\" -m '{\"\"test\"\": \"\"testing wider field display\"\", \"\"timestamp\"\": \"\"2025-08-12T00:25:00Z\"\"}')"
     ],
     "deny": []
   }

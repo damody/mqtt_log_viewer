@@ -23,6 +23,7 @@ pub enum AppEvent {
     Backspace,
     Delete,
     Paste(String),
+    Space,  // 空白鍵事件
 }
 
 impl From<KeyEvent> for AppEvent {
@@ -47,6 +48,7 @@ impl From<KeyEvent> for AppEvent {
                 AppEvent::Paste(String::new())
             },
             KeyCode::Tab => AppEvent::Tab,
+            KeyCode::Char(' ') => AppEvent::Space,  // 空白鍵特殊處理
             KeyCode::Char(c) => AppEvent::Input(c),
             KeyCode::Up => AppEvent::NavigateUp,
             KeyCode::Down => AppEvent::NavigateDown,
@@ -391,7 +393,25 @@ impl App {
                     self.render()?;
                 }
                 
-                // Tab events are handled by crossterm to avoid double processing
+                if self.is_key_just_pressed(0x20) { // VK_SPACE (Space)
+                    let field_debug = format!("SPACE key detected! Active field: {:?}, Is editing: {}", 
+                                            self.filter_state.active_field, self.filter_state.is_editing);
+                    tracing::debug!("SPACE key detected via Windows API - {}", field_debug);
+                    if self.handle_event(AppEvent::Space).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x09) { // VK_TAB
+                    let field_debug = format!("TAB key detected! Current field: {:?} -> ", self.filter_state.active_field);
+                    std::fs::write("debug_key.txt", &field_debug).ok();
+                    tracing::info!("TAB key detected via Windows API - {}", field_debug);
+                    if self.handle_event(AppEvent::Tab).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
                 
                 // 檢測 Ctrl+C (需要同時檢測兩個鍵)
                 unsafe {
@@ -411,7 +431,7 @@ impl App {
                         // 處理字符輸入事件和Backspace事件
                         let app_event = AppEvent::from(key_event);
                         tracing::debug!("Converted to AppEvent: {:?}", app_event);
-                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) || matches!(app_event, AppEvent::Copy) {
+                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Copy) {
                             tracing::debug!("Input/Backspace/Tab/Copy event detected: {:?}", app_event);
                             if self.handle_event(app_event).await? {
                                 break;
@@ -556,7 +576,26 @@ impl App {
                     self.render()?;
                 }
                 
-                // Tab events are handled by crossterm to avoid double processing
+                if self.is_key_just_pressed(0x20) { // VK_SPACE (Space)
+                    let field_debug = format!("SPACE key detected! Active field: {:?}, Is editing: {}", 
+                                            self.filter_state.active_field, self.filter_state.is_editing);
+                    std::fs::write("debug_key.txt", &field_debug).ok();
+                    tracing::debug!("SPACE key detected via Windows API - {}", field_debug);
+                    if self.handle_event(AppEvent::Space).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
+                
+                if self.is_key_just_pressed(0x09) { // VK_TAB
+                    let field_debug = format!("TAB key detected! Current field: {:?} -> ", self.filter_state.active_field);
+                    std::fs::write("debug_key.txt", &field_debug).ok();
+                    tracing::debug!("TAB key detected via Windows API - {}", field_debug);
+                    if self.handle_event(AppEvent::Tab).await? {
+                        break;
+                    }
+                    self.render()?;
+                }
                 
                 // 檢測 Ctrl+C (需要同時檢測兩個鍵)
                 unsafe {
@@ -576,7 +615,7 @@ impl App {
                         // 處理字符輸入事件和Backspace事件
                         let app_event = AppEvent::from(key_event);
                         tracing::debug!("Converted to AppEvent: {:?}", app_event);
-                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Tab) || matches!(app_event, AppEvent::Copy) {
+                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Copy) {
                             tracing::debug!("Input/Backspace/Tab/Copy event detected: {:?}", app_event);
                             if self.handle_event(app_event).await? {
                                 break;
@@ -658,22 +697,49 @@ impl App {
     
     async fn handle_topic_list_event(&mut self, event: AppEvent) -> Result<()> {
         if self.filter_state.is_editing {
-            let should_apply_filter = matches!(event, AppEvent::Input(_) | AppEvent::Backspace);
-            self.handle_filter_input(event);
-            // 即時應用第一層的過濾器
-            if should_apply_filter {
-                self.apply_filters().await?;
+            // 在 Topic 或 Payload 欄位時，上下鍵應該切換 topic
+            // 在時間欄位時，上下左右鍵由過濾器處理邏輯處理
+            if matches!(self.filter_state.active_field, 
+                       crate::ui::widgets::FilterField::Topic | 
+                       crate::ui::widgets::FilterField::Payload) &&
+               matches!(event, AppEvent::NavigateUp | AppEvent::NavigateDown) {
+                // 讓上下鍵事件傳遞到下面的處理邏輯
+            } else {
+                let should_apply_filter = matches!(event, AppEvent::Input(_) | AppEvent::Backspace);
+                // 在時間編輯模式下，方向鍵需要重新渲染以更新高亮和光標
+                let should_rerender = (self.filter_state.time_edit_mode || 
+                                      matches!(self.filter_state.active_field, 
+                                              crate::ui::widgets::FilterField::StartTime | 
+                                              crate::ui::widgets::FilterField::EndTime)) && 
+                                     matches!(event, AppEvent::NavigateLeft | AppEvent::NavigateRight | 
+                                                    AppEvent::NavigateUp | AppEvent::NavigateDown |
+                                                    AppEvent::PageUp | AppEvent::PageDown);
+                let time_filter_changed = self.handle_filter_input(event);
+                // 即時應用第一層的過濾器
+                if should_apply_filter || time_filter_changed {
+                    self.apply_filters().await?;
+                }
+                // 時間編輯模式下的導航需要重新渲染以更新高亮
+                if should_rerender {
+                    self.needs_full_redraw = true;
+                }
+                return Ok(());
             }
-            return Ok(());
         }
 
         tracing::debug!("Handling topic list event: {:?}", event);
         match event {
             AppEvent::Tab => {
                 tracing::debug!("Tab pressed in topic list - switching filter focus");
-                self.filter_state.next_field();
+                if !self.filter_state.is_editing {
+                    // 從主列表切換到Topic filter
+                    self.filter_state.active_field = crate::ui::widgets::FilterField::Topic;
+                } else {
+                    // 已經在編輯模式，切換到下一個欄位
+                    self.filter_state.next_field();
+                }
                 self.filter_state.is_editing = true;
-                tracing::debug!("Auto-started editing after Tab in topic list");
+                tracing::debug!("Auto-started editing after Tab in topic list, active field: {:?}", self.filter_state.active_field);
             },
             AppEvent::NavigateUp => {
                 tracing::debug!("Navigate up - topics count: {}, selected_index: {}", 
@@ -1197,26 +1263,147 @@ impl App {
         Ok(())
     }
     
-    fn handle_filter_input(&mut self, event: AppEvent) {
-        match event {
-            AppEvent::Input(c) if c != '\0' => {
-                self.filter_state.get_active_field_value_mut().push(c);
+    fn handle_filter_input(&mut self, event: AppEvent) -> bool {
+        // 如果在時間編輯模式，特殊處理
+        if self.filter_state.time_edit_mode {
+            let mut should_apply_filter = false;
+            match event {
+                AppEvent::NavigateLeft => {
+                    self.filter_state.prev_time_position();
+                }
+                AppEvent::NavigateRight => {
+                    self.filter_state.next_time_position();
+                }
+                AppEvent::NavigateUp => {
+                    self.filter_state.adjust_time_value(-1);
+                }
+                AppEvent::NavigateDown => {
+                    self.filter_state.adjust_time_value(1);
+                }
+                AppEvent::PageUp => {
+                    self.filter_state.adjust_time_value(-10);
+                }
+                AppEvent::PageDown => {
+                    self.filter_state.adjust_time_value(10);
+                }
+                AppEvent::Space => {
+                    // 再次按空白鍵關閉時間編輯模式並套用過濾
+                    self.filter_state.toggle_time_edit_mode();
+                    should_apply_filter = true;
+                }
+                AppEvent::Enter => {
+                    // 確認並關閉時間編輯模式，套用過濾
+                    self.filter_state.time_edit_mode = false;
+                    self.filter_state.temp_datetime = None;
+                    should_apply_filter = true;
+                }
+                AppEvent::Escape => {
+                    // 取消編輯，恢復原值
+                    self.filter_state.time_edit_mode = false;
+                    self.filter_state.temp_datetime = None;
+                    // TODO: 恢復原始值
+                }
+                AppEvent::Tab => {
+                    // 在時間編輯模式下，Tab切換到下一個欄位並關閉時間編輯
+                    self.filter_state.time_edit_mode = false;
+                    self.filter_state.temp_datetime = None;
+                    self.filter_state.next_field();
+                    should_apply_filter = true;
+                }
+                _ => {}
             }
-            AppEvent::Backspace => {
-                self.filter_state.get_active_field_value_mut().pop();
+            return should_apply_filter;
+        } else {
+            // 正常的過濾器編輯模式
+            // 如果在時間欄位，直接處理上下左右鍵
+            if matches!(self.filter_state.active_field, 
+                       crate::ui::widgets::FilterField::StartTime | 
+                       crate::ui::widgets::FilterField::EndTime) {
+                match event {
+                    AppEvent::NavigateLeft => {
+                        // 如果還沒進入時間編輯模式，先進入
+                        if !self.filter_state.time_edit_mode {
+                            self.filter_state.enter_time_edit_mode();
+                        }
+                        self.filter_state.prev_time_position();
+                    }
+                    AppEvent::NavigateRight => {
+                        // 如果還沒進入時間編輯模式，先進入
+                        if !self.filter_state.time_edit_mode {
+                            self.filter_state.enter_time_edit_mode();
+                        }
+                        self.filter_state.next_time_position();
+                    }
+                    AppEvent::NavigateUp => {
+                        // 如果還沒進入時間編輯模式，先進入
+                        if !self.filter_state.time_edit_mode {
+                            self.filter_state.enter_time_edit_mode();
+                        }
+                        self.filter_state.adjust_time_value(-1);
+                    }
+                    AppEvent::NavigateDown => {
+                        // 如果還沒進入時間編輯模式，先進入
+                        if !self.filter_state.time_edit_mode {
+                            self.filter_state.enter_time_edit_mode();
+                        }
+                        self.filter_state.adjust_time_value(1);
+                    }
+                    AppEvent::PageUp => {
+                        // 如果還沒進入時間編輯模式，先進入
+                        if !self.filter_state.time_edit_mode {
+                            self.filter_state.enter_time_edit_mode();
+                        }
+                        self.filter_state.adjust_time_value(-10);
+                    }
+                    AppEvent::PageDown => {
+                        // 如果還沒進入時間編輯模式，先進入
+                        if !self.filter_state.time_edit_mode {
+                            self.filter_state.enter_time_edit_mode();
+                        }
+                        self.filter_state.adjust_time_value(10);
+                    }
+                    AppEvent::Tab => {
+                        // Tab 鍵切換到下一個欄位
+                        if self.filter_state.time_edit_mode {
+                            self.filter_state.time_edit_mode = false;
+                            self.filter_state.temp_datetime = None;
+                        }
+                        self.filter_state.next_field();
+                    }
+                    AppEvent::Space => {
+                        // 空白鍵可以開關時間編輯模式
+                        self.filter_state.toggle_time_edit_mode();
+                    }
+                    _ => {}
+                }
+            } else {
+                // Topic 或 Payload 欄位的處理
+                match event {
+                    AppEvent::Space => {
+                        // 在其他欄位，空白鍵視為正常輸入
+                        self.filter_state.get_active_field_value_mut().push(' ');
+                    }
+                    AppEvent::Input(c) if c != '\0' => {
+                        self.filter_state.get_active_field_value_mut().push(c);
+                    }
+                    AppEvent::Backspace => {
+                        self.filter_state.get_active_field_value_mut().pop();
+                    }
+                    AppEvent::Tab => {
+                        tracing::debug!("Tab pressed in filter edit mode - switching to next field");
+                        self.filter_state.next_field();
+                    }
+                    AppEvent::NavigateRight => {
+                        self.filter_state.next_field();
+                    }
+                    AppEvent::NavigateLeft => {
+                        self.filter_state.previous_field();
+                    }
+                    _ => {}
+                }
             }
-            AppEvent::Tab => {
-                tracing::debug!("Tab pressed in filter edit mode - switching to next field");
-                self.filter_state.next_field();
-            }
-            AppEvent::NavigateRight => {
-                self.filter_state.next_field();
-            }
-            AppEvent::NavigateLeft => {
-                self.filter_state.previous_field();
-            }
-            _ => {}
         }
+        return false; // 正常編輯模式不需要套用過濾
     }
     
     fn toggle_filter_mode(&mut self) {
@@ -1332,7 +1519,28 @@ impl App {
             criteria.payload_regex = Some(self.filter_state.payload_filter.clone());
         }
         
-        // TODO: Parse time filters
+        // 解析時間過濾器
+        if !self.filter_state.start_time.is_empty() {
+            // 嘗試解析開始時間
+            if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&self.filter_state.start_time, "%Y-%m-%d %H:%M:%S") {
+                use chrono::{TimeZone, Local};
+                if let Some(dt) = Local.from_local_datetime(&naive_dt).single() {
+                    criteria.start_time = Some(dt.with_timezone(&chrono::Utc));
+                    tracing::debug!("Applied start time filter: {}", dt);
+                }
+            }
+        }
+        
+        if !self.filter_state.end_time.is_empty() {
+            // 嘗試解析結束時間
+            if let Ok(naive_dt) = chrono::NaiveDateTime::parse_from_str(&self.filter_state.end_time, "%Y-%m-%d %H:%M:%S") {
+                use chrono::{TimeZone, Local};
+                if let Some(dt) = Local.from_local_datetime(&naive_dt).single() {
+                    criteria.end_time = Some(dt.with_timezone(&chrono::Utc));
+                    tracing::debug!("Applied end time filter: {}", dt);
+                }
+            }
+        }
         
         criteria
     }
