@@ -1,6 +1,6 @@
 use crate::db::models::{Message, FilterCriteria};
 use crate::db::repository::MessageRepository;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Local, NaiveDateTime};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FocusTarget {
@@ -8,6 +8,16 @@ pub enum FocusTarget {
     TimeFilterFrom,
     TimeFilterTo,
     MessageList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TimeEditPosition {
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
 }
 
 pub struct MessageListState {
@@ -27,6 +37,9 @@ pub struct MessageListState {
     pub filter_error: Option<String>, // 用於顯示過濾器錯誤
     pub cursor_position: usize, // 當前遊標在輸入欄位中的位置
     pub delete_confirmation: bool, // 刪除確認標誌
+    pub time_edit_mode: bool,  // 是否處於時間編輯模式
+    pub time_edit_position: TimeEditPosition,  // 當前編輯的時間部分
+    pub temp_datetime: Option<DateTime<Local>>,  // 暫存的時間值
 }
 
 impl MessageListState {
@@ -53,6 +66,9 @@ impl MessageListState {
             filter_error: None,
             cursor_position: 0,
             delete_confirmation: false,
+            time_edit_mode: false,
+            time_edit_position: TimeEditPosition::Day,
+            temp_datetime: None,
         }
     }
     
@@ -313,13 +329,24 @@ impl MessageListState {
     pub fn start_editing(&mut self) {
         if matches!(self.focus, FocusTarget::PayloadFilter | FocusTarget::TimeFilterFrom | FocusTarget::TimeFilterTo) {
             self.is_editing = true;
-            // 將遊標移到當前輸入欄位的末端
-            self.cursor_position = self.get_active_input().len();
+            
+            // 如果是時間欄位，自動進入時間編輯模式
+            if matches!(self.focus, FocusTarget::TimeFilterFrom | FocusTarget::TimeFilterTo) {
+                self.enter_time_edit_mode();
+            } else {
+                // 將遊標移到當前輸入欄位的末端
+                self.cursor_position = self.get_active_input().len();
+            }
         }
     }
     
     pub fn stop_editing(&mut self) {
         self.is_editing = false;
+        // 離開編輯模式時也離開時間編輯模式
+        if self.time_edit_mode {
+            self.time_edit_mode = false;
+            self.temp_datetime = None;
+        }
     }
     
     // 遊標操作方法
@@ -378,6 +405,25 @@ impl MessageListState {
     }
     
     pub fn get_cursor_position(&self) -> Option<(u16, u16)> {
+        // 在時間編輯模式下，顯示光標在當前編輯位置
+        if self.time_edit_mode && matches!(self.focus, FocusTarget::TimeFilterFrom | FocusTarget::TimeFilterTo) {
+            let (field_row, field_col) = match self.focus {
+                FocusTarget::TimeFilterFrom => (2, 13), // "│ Time: From [" = 13 chars
+                FocusTarget::TimeFilterTo => (2, 13 + 19 + 6), // "│ Time: From [19 chars] To [" = 13 + 19 + 6 = 38
+                _ => return None,
+            };
+            
+            let cursor_offset = match self.time_edit_position {
+                TimeEditPosition::Year => 2,    // 位於年份的中間位置 (20|25)
+                TimeEditPosition::Month => 6,   // 位於月份的中間位置 (2025-0|8)
+                TimeEditPosition::Day => 9,     // 位於日期的中間位置 (2025-08-1|2)
+                TimeEditPosition::Hour => 12,   // 位於小時的中間位置 (2025-08-12 0|0)
+                TimeEditPosition::Minute => 15, // 位於分鐘的中間位置 (2025-08-12 00:3|0)
+                TimeEditPosition::Second => 18, // 位於秒鐘的中間位置 (2025-08-12 00:30:0|0)
+            };
+            return Some((field_col + cursor_offset, field_row));
+        }
+        
         if !self.is_editing {
             return None;
         }
@@ -386,15 +432,149 @@ impl MessageListState {
             FocusTarget::PayloadFilter => (1, 17), // "│ Payload Filter: [" = 17 chars
             FocusTarget::TimeFilterFrom => (2, 13), // "│ Time: From [" = 13 chars  
             FocusTarget::TimeFilterTo => {
-                let from_len = self.time_from_input.len().min(11);
+                let from_len = self.time_from_input.len().min(19);
                 (2, 13 + from_len as u16 + 6) // "│ Time: From [xxx] To [" = 13 + len + 6
             },
             FocusTarget::MessageList => return None, // No cursor for message list
         };
         
-        let cursor_offset = self.cursor_position.min(11) as u16;
+        let cursor_offset = self.cursor_position.min(19) as u16;
         
         Some((field_col + cursor_offset, field_row))
+    }
+    
+    // 時間編輯模式相關方法
+    pub fn toggle_time_edit_mode(&mut self) {
+        if matches!(self.focus, FocusTarget::TimeFilterFrom | FocusTarget::TimeFilterTo) {
+            self.time_edit_mode = !self.time_edit_mode;
+            
+            if self.time_edit_mode {
+                self.enter_time_edit_mode();
+            } else {
+                // 離開編輯模式
+                self.temp_datetime = None;
+            }
+        }
+    }
+    
+    pub fn enter_time_edit_mode(&mut self) {
+        if matches!(self.focus, FocusTarget::TimeFilterFrom | FocusTarget::TimeFilterTo) {
+            self.time_edit_mode = true;
+            
+            // 進入編輯模式時，如果欄位是空的，填入當前時間
+            let current_value = match self.focus {
+                FocusTarget::TimeFilterFrom => &self.time_from_input,
+                FocusTarget::TimeFilterTo => &self.time_to_input,
+                _ => "",
+            };
+            
+            if current_value.is_empty() {
+                let now = Local::now();
+                self.temp_datetime = Some(now);
+                let formatted = now.format("%Y-%m-%d %H:%M:%S").to_string();
+                
+                match self.focus {
+                    FocusTarget::TimeFilterFrom => self.time_from_input = formatted,
+                    FocusTarget::TimeFilterTo => self.time_to_input = formatted,
+                    _ => {}
+                }
+            } else {
+                // 解析現有時間
+                if let Ok(naive) = NaiveDateTime::parse_from_str(current_value, "%Y-%m-%d %H:%M:%S") {
+                    use chrono::TimeZone;
+                    if let Some(local_dt) = Local.from_local_datetime(&naive).single() {
+                        self.temp_datetime = Some(local_dt);
+                    }
+                }
+            }
+            
+            self.time_edit_position = TimeEditPosition::Day; // 預設光標放在日期上
+        }
+    }
+    
+    pub fn next_time_position(&mut self) {
+        if self.time_edit_mode {
+            self.time_edit_position = match self.time_edit_position {
+                TimeEditPosition::Year => TimeEditPosition::Month,
+                TimeEditPosition::Month => TimeEditPosition::Day,
+                TimeEditPosition::Day => TimeEditPosition::Hour,
+                TimeEditPosition::Hour => TimeEditPosition::Minute,
+                TimeEditPosition::Minute => TimeEditPosition::Second,
+                TimeEditPosition::Second => TimeEditPosition::Year,
+            };
+        }
+    }
+    
+    pub fn prev_time_position(&mut self) {
+        if self.time_edit_mode {
+            self.time_edit_position = match self.time_edit_position {
+                TimeEditPosition::Year => TimeEditPosition::Second,
+                TimeEditPosition::Month => TimeEditPosition::Year,
+                TimeEditPosition::Day => TimeEditPosition::Month,
+                TimeEditPosition::Hour => TimeEditPosition::Day,
+                TimeEditPosition::Minute => TimeEditPosition::Hour,
+                TimeEditPosition::Second => TimeEditPosition::Minute,
+            };
+        }
+    }
+    
+    pub fn adjust_time_value(&mut self, delta: i32) {
+        if !self.time_edit_mode || self.temp_datetime.is_none() {
+            return;
+        }
+        
+        if let Some(mut dt) = self.temp_datetime {
+            use chrono::Datelike;
+            use chrono::Timelike;
+            
+            match self.time_edit_position {
+                TimeEditPosition::Year => {
+                    let new_year = dt.year() + delta;
+                    if new_year >= 1970 && new_year <= 9999 {
+                        dt = dt.with_year(new_year).unwrap_or(dt);
+                    }
+                }
+                TimeEditPosition::Month => {
+                    let new_month = dt.month() as i32 + delta;
+                    if new_month >= 1 && new_month <= 12 {
+                        dt = dt.with_month(new_month as u32).unwrap_or(dt);
+                    }
+                }
+                TimeEditPosition::Day => {
+                    let new_day = dt.day() as i32 + delta;
+                    if new_day >= 1 && new_day <= 31 {
+                        dt = dt.with_day(new_day as u32).unwrap_or(dt);
+                    }
+                }
+                TimeEditPosition::Hour => {
+                    let new_hour = dt.hour() as i32 + delta;
+                    if new_hour >= 0 && new_hour <= 23 {
+                        dt = dt.with_hour(new_hour as u32).unwrap_or(dt);
+                    }
+                }
+                TimeEditPosition::Minute => {
+                    let new_minute = dt.minute() as i32 + delta;
+                    if new_minute >= 0 && new_minute <= 59 {
+                        dt = dt.with_minute(new_minute as u32).unwrap_or(dt);
+                    }
+                }
+                TimeEditPosition::Second => {
+                    let new_second = dt.second() as i32 + delta;
+                    if new_second >= 0 && new_second <= 59 {
+                        dt = dt.with_second(new_second as u32).unwrap_or(dt);
+                    }
+                }
+            }
+            
+            self.temp_datetime = Some(dt);
+            let formatted = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+            
+            match self.focus {
+                FocusTarget::TimeFilterFrom => self.time_from_input = formatted,
+                FocusTarget::TimeFilterTo => self.time_to_input = formatted,
+                _ => {}
+            }
+        }
     }
 }
 

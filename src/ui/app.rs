@@ -981,6 +981,138 @@ impl App {
     }
     
     async fn handle_message_list_filter_input(&mut self, event: AppEvent) -> Result<()> {
+        // 如果在時間編輯模式，特殊處理
+        if self.message_list_state.time_edit_mode {
+            match event {
+                AppEvent::NavigateLeft => {
+                    self.message_list_state.prev_time_position();
+                    self.needs_full_redraw = true;
+                }
+                AppEvent::NavigateRight => {
+                    self.message_list_state.next_time_position();
+                    self.needs_full_redraw = true;
+                }
+                AppEvent::NavigateUp => {
+                    self.message_list_state.adjust_time_value(-1);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                }
+                AppEvent::NavigateDown => {
+                    self.message_list_state.adjust_time_value(1);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                }
+                AppEvent::PageUp => {
+                    self.message_list_state.adjust_time_value(-10);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                }
+                AppEvent::PageDown => {
+                    self.message_list_state.adjust_time_value(10);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                }
+                AppEvent::Space => {
+                    // 再次按空白鍵關閉時間編輯模式
+                    self.message_list_state.toggle_time_edit_mode();
+                    self.apply_message_list_filters().await?;
+                }
+                AppEvent::Enter => {
+                    // 確認並關閉時間編輯模式
+                    self.message_list_state.time_edit_mode = false;
+                    self.message_list_state.temp_datetime = None;
+                    self.apply_message_list_filters().await?;
+                }
+                AppEvent::Escape => {
+                    // 取消編輯，恢復原值
+                    self.message_list_state.time_edit_mode = false;
+                    self.message_list_state.temp_datetime = None;
+                }
+                AppEvent::Tab => {
+                    // 在時間編輯模式下，Tab切換到下一個欄位並關閉時間編輯
+                    self.message_list_state.time_edit_mode = false;
+                    self.message_list_state.temp_datetime = None;
+                    self.message_list_state.next_focus();
+                    self.apply_message_list_filters().await?;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        
+        // 如果在時間欄位，直接處理上下左右鍵
+        if matches!(self.message_list_state.focus, 
+                   crate::ui::views::message_list::FocusTarget::TimeFilterFrom | 
+                   crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+            match event {
+                AppEvent::NavigateLeft => {
+                    // 如果還沒進入時間編輯模式，先進入
+                    if !self.message_list_state.time_edit_mode {
+                        self.message_list_state.enter_time_edit_mode();
+                    }
+                    self.message_list_state.prev_time_position();
+                    self.needs_full_redraw = true;
+                    return Ok(());
+                }
+                AppEvent::NavigateRight => {
+                    // 如果還沒進入時間編輯模式，先進入
+                    if !self.message_list_state.time_edit_mode {
+                        self.message_list_state.enter_time_edit_mode();
+                    }
+                    self.message_list_state.next_time_position();
+                    self.needs_full_redraw = true;
+                    return Ok(());
+                }
+                AppEvent::NavigateUp => {
+                    // 如果還沒進入時間編輯模式，先進入
+                    if !self.message_list_state.time_edit_mode {
+                        self.message_list_state.enter_time_edit_mode();
+                    }
+                    self.message_list_state.adjust_time_value(-1);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                    return Ok(());
+                }
+                AppEvent::NavigateDown => {
+                    // 如果還沒進入時間編輯模式，先進入
+                    if !self.message_list_state.time_edit_mode {
+                        self.message_list_state.enter_time_edit_mode();
+                    }
+                    self.message_list_state.adjust_time_value(1);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                    return Ok(());
+                }
+                AppEvent::PageUp => {
+                    // 如果還沒進入時間編輯模式，先進入
+                    if !self.message_list_state.time_edit_mode {
+                        self.message_list_state.enter_time_edit_mode();
+                    }
+                    self.message_list_state.adjust_time_value(-10);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                    return Ok(());
+                }
+                AppEvent::PageDown => {
+                    // 如果還沒進入時間編輯模式，先進入
+                    if !self.message_list_state.time_edit_mode {
+                        self.message_list_state.enter_time_edit_mode();
+                    }
+                    self.message_list_state.adjust_time_value(10);
+                    self.apply_message_list_filters().await?;
+                    self.needs_full_redraw = true;
+                    return Ok(());
+                }
+                AppEvent::Space => {
+                    // 空白鍵可以開關時間編輯模式
+                    self.message_list_state.toggle_time_edit_mode();
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        
+        // 正常的過濾器編輯模式
         match event {
             AppEvent::Tab => {
                 tracing::debug!("Tab pressed in editing mode - switching focus");

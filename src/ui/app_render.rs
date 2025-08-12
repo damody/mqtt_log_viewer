@@ -225,6 +225,9 @@ impl App {
         // Position cursor for input if editing
         if let Some((col, row)) = self.get_message_list_cursor_position() {
             stdout.queue(MoveTo(col, row))?;
+            stdout.execute(Show)?;
+        } else {
+            stdout.execute(Hide)?;
         }
         
         stdout.flush()?;
@@ -438,50 +441,75 @@ impl App {
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
         let focus = message_state.get_focus();
         
-        let from_text = if !message_state.time_from_input.is_empty() {
-            &message_state.time_from_input
-        } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
-            if message_state.is_editing {
-                "<<<EDITING>>>"
-            } else {
-                "<<<FOCUS>>>"
-            }
-        } else {
-            "___________________"
-        };
-        
-        let to_text = if !message_state.time_to_input.is_empty() {
-            &message_state.time_to_input
-        } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
-            if message_state.is_editing {
-                "<<<EDITING>>>"
-            } else {
-                "<<<FOCUS>>>"
-            }
-        } else {
-            "___________________"
-        };
-        
         stdout.queue(Print("│ Time: From ["))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
-            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+        
+        // 渲染FROM欄位，如果在時間編輯模式則特殊顯示
+        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) && message_state.time_edit_mode {
+            self.render_message_list_time_edit_field(stdout, &message_state.time_from_input, &message_state.time_edit_position)?;
+        } else {
+            let from_text = if !message_state.time_from_input.is_empty() {
+                &message_state.time_from_input
+            } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
+                if message_state.is_editing {
+                    "<<<EDITING>>>"
+                } else {
+                    "<<<FOCUS>>>"
+                }
+            } else {
+                "___________________"
+            };
+            
+            if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            }
+            stdout.queue(Print(&format!("{:19}", from_text)))?; // 固定19字符寬度
+            if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
+                stdout.queue(ResetColor)?;
+            }
         }
-        stdout.queue(Print(from_text))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterFrom) {
-            stdout.queue(ResetColor)?;
-        }
+        
         stdout.queue(Print("] To ["))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
-            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+        
+        // 渲染TO欄位，如果在時間編輯模式則特殊顯示  
+        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) && message_state.time_edit_mode {
+            self.render_message_list_time_edit_field(stdout, &message_state.time_to_input, &message_state.time_edit_position)?;
+        } else {
+            let to_text = if !message_state.time_to_input.is_empty() {
+                &message_state.time_to_input
+            } else if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+                if message_state.is_editing {
+                    "<<<EDITING>>>"
+                } else {
+                    "<<<FOCUS>>>"
+                }
+            } else {
+                "___________________"
+            };
+            
+            if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+                stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            }
+            stdout.queue(Print(&format!("{:19}", to_text)))?; // 固定19字符寬度
+            if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
+                stdout.queue(ResetColor)?;
+            }
         }
-        stdout.queue(Print(to_text))?;
-        if matches!(focus, crate::ui::views::message_list::FocusTarget::TimeFilterTo) {
-            stdout.queue(ResetColor)?;
-        }
+        
         stdout.queue(Print("]"))?;
         
-        let line_len = 16 + from_text.len() + 6 + to_text.len() + 1;
-        let padding = terminal_width.saturating_sub(line_len + 1);
+        // 如果在時間編輯模式，顯示提示
+        if message_state.time_edit_mode {
+            stdout.queue(Print(" "))?;
+            stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
+            stdout.queue(Print("[←→:切換 ↑↓:±1 PgUp/Dn:±10]"))?;
+            stdout.queue(ResetColor)?;
+        }
+        
+        // 計算剩餘空間並填充
+        let base_len = 13 + 19 + 6 + 19 + 1; // "│ Time: From [" + 19 + "] To [" + 19 + "]"
+        let hint_len = if message_state.time_edit_mode { 1 + 24 } else { 0 }; // " [←→:切換 ↑↓:±1 PgUp/Dn:±10]"
+        let used_len = base_len + hint_len;
+        let padding = terminal_width.saturating_sub(used_len + 1);
         stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
         stdout.queue(Print("│"))?;
         Ok(())
@@ -654,7 +682,15 @@ impl App {
         
         let current_scroll_offset = self.get_payload_detail_scroll_offset();
         
-        // Render payload content with scroll offset
+        // 計算最大行號的寬度（用於對齊）
+        let total_lines = payload_lines.len();
+        let line_number_width = if total_lines == 0 {
+            1
+        } else {
+            ((total_lines as f64).log10().floor() as usize) + 1
+        };
+        
+        // Render payload content with scroll offset and line numbers
         for i in 0..available_height {
             let row = content_start_row + i as u16;
             stdout.queue(MoveTo(0, row))?;
@@ -664,8 +700,16 @@ impl App {
             
             let line_index = (i as usize) + current_scroll_offset;
             if let Some(line) = payload_lines.get(line_index) {
-                // Truncate line if too long for terminal
-                let max_content_width = terminal_width.saturating_sub(4); // "│ " + " │"
+                // 顯示行號（從1開始）
+                let line_number = line_index + 1;
+                stdout.queue(SetForegroundColor(crossterm::style::Color::DarkGrey))?;
+                stdout.queue(Print(&format!("{:>width$} ", line_number, width = line_number_width)))?;
+                stdout.queue(ResetColor)?;
+                
+                // 計算內容可用寬度：終端寬度 - "│ " - 行號 - " " - " │"
+                let line_number_space = line_number_width + 1; // 行號 + 一個空格
+                let max_content_width = terminal_width.saturating_sub(4 + line_number_space); // "│ " + 行號空間 + " │"
+                
                 if line.len() > max_content_width {
                     let truncated = format!("{}...", &line[..max_content_width.saturating_sub(3)]);
                     stdout.queue(Print(&truncated))?;
@@ -677,7 +721,7 @@ impl App {
                     stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
                 }
             } else {
-                // Empty line
+                // Empty line - 只顯示空白，不顯示行號
                 let padding = terminal_width.saturating_sub(3); // "│ " + "│"
                 stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             }
@@ -705,6 +749,47 @@ impl App {
         };
         stdout.queue(Print(format!("Payload: {} bytes{} | Topic: {}", 
                                  payload_size, scroll_info, selected_message.topic)))?;
+        Ok(())
+    }
+    
+    // 渲染時間編輯欄位的輔助方法
+    fn render_message_list_time_edit_field(&self, stdout: &mut std::io::Stdout, value: &str, position: &crate::ui::views::message_list::TimeEditPosition) -> Result<()> {
+        use crate::ui::views::message_list::TimeEditPosition;
+        
+        if value.len() >= 19 {  // "YYYY-MM-DD HH:MM:SS"
+            // 根據當前編輯位置高亮顯示不同部分
+            let parts = [
+                (&value[0..4], TimeEditPosition::Year),     // YYYY
+                (&value[5..7], TimeEditPosition::Month),    // MM
+                (&value[8..10], TimeEditPosition::Day),     // DD
+                (&value[11..13], TimeEditPosition::Hour),   // HH
+                (&value[14..16], TimeEditPosition::Minute), // MM
+                (&value[17..19], TimeEditPosition::Second), // SS
+            ];
+            
+            for (i, (part, part_position)) in parts.iter().enumerate() {
+                if part_position == position {
+                    // 高亮當前編輯的部分
+                    stdout.queue(SetForegroundColor(crossterm::style::Color::Green))?;
+                    stdout.queue(Print(part))?;
+                    stdout.queue(ResetColor)?;
+                } else {
+                    stdout.queue(Print(part))?;
+                }
+                
+                // 添加分隔符
+                if i < 2 {
+                    stdout.queue(Print("-"))?;
+                } else if i == 2 {
+                    stdout.queue(Print(" "))?;
+                } else if i < 5 {
+                    stdout.queue(Print(":"))?;
+                }
+            }
+        } else {
+            stdout.queue(Print(&format!("{:19}", value)))?;
+        }
+        
         Ok(())
     }
 }
