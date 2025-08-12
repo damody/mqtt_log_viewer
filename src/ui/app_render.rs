@@ -193,7 +193,7 @@ impl App {
         stdout.queue(MoveTo(0, 4))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
         stdout.queue(Print("│ "))?;
-        let header = format!("{:<12} │ {:<50}", "Time", "Payload");
+        let header = format!("  {:>5} │ {:<10} │ {:<50}", "No.", "Time", "Payload");
         let padded_header = format!("{:<width$}", header, width = terminal_width.saturating_sub(3));
         stdout.queue(Print(&padded_header))?;
         stdout.queue(Print("│"))?;
@@ -560,13 +560,21 @@ impl App {
                     stdout.queue(ResetColor)?;
                 } else {
                     // Normal message display
+                    // 計算流水號（考慮分頁，越新的訊息數字越大）
+                    // 總數 - ((當前頁-1) * 每頁數量 + 當前索引)
+                    let sequence_number = message_state.total_count - ((message_state.page - 1) * message_state.per_page + i as usize);
+                    
+                    // 顯示流水號
+                    stdout.queue(Print(&format!("{:>5} │ ", sequence_number)))?;
+                    
                     // Format timestamp (HH:MM:SS)
                     let time_str = msg.timestamp.format("%H:%M:%S").to_string();
                     stdout.queue(Print(&format!("{:<10}", time_str)))?;
                     stdout.queue(Print(" │ "))?;
                     
                     // Truncate payload if too long
-                    let max_payload_width = terminal_width.saturating_sub(20);
+                    // 調整最大寬度以配合新增的流水號欄位 (原本20 + 7 for "12345 │ ")
+                    let max_payload_width = terminal_width.saturating_sub(27);
                     let payload_display = if msg.payload.len() > max_payload_width {
                         format!("{}...", &msg.payload[..max_payload_width.saturating_sub(3)])
                     } else {
