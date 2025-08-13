@@ -677,8 +677,9 @@ impl App {
                     // 顯示流水號
                     stdout.queue(Print(&format!("{:>5} │ ", sequence_number)))?;
                     
-                    // Format timestamp (HH:MM:SS)
-                    let time_str = msg.timestamp.format("%H:%M:%S").to_string();
+                    // Format timestamp (HH:MM:SS) - convert from UTC to Local time
+                    let local_time = msg.timestamp.with_timezone(&chrono::Local);
+                    let time_str = local_time.format("%H:%M:%S").to_string();
                     stdout.queue(Print(&format!("{:<10}", time_str)))?;
                     stdout.queue(Print(" │ "))?;
                     

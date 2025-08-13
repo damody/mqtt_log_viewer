@@ -359,8 +359,9 @@ impl TopicListView {
         terminal_width: u16,
         sequence_number: usize
     ) -> Result<()> {
-        // Format timestamp
-        let time_str = topic.last_message_time.format("%H:%M:%S").to_string();
+        // Format timestamp (convert from UTC to Local time)
+        let local_time = topic.last_message_time.with_timezone(&chrono::Local);
+        let time_str = local_time.format("%H:%M:%S").to_string();
         
         // Format message count
         let count_str = if topic.message_count > 9999 {
