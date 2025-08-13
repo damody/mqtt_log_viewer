@@ -149,7 +149,10 @@ impl MessageListState {
             filter.offset = Some(((self.page - 1) * self.per_page) as i64);
             
             tracing::info!("load_messages filter: {:?}", filter);
-            self.messages = repo.get_messages_by_topic(&topic, &filter).await?;
+            let mut all_messages = repo.get_messages_by_topic(&topic, &filter).await?;
+            
+            // 應用快速過濾器過濾
+            self.messages = self.apply_quick_filters(all_messages);
             
             // Get total count for this topic with same filters (but without limit/offset)
             let count_filter = FilterCriteria {
@@ -162,7 +165,8 @@ impl MessageListState {
             };
             tracing::info!("load_messages count_filter: {:?}", count_filter);
             if let Ok(count_messages) = repo.get_messages_by_topic(&topic, &count_filter).await {
-                self.total_count = count_messages.len();
+                let filtered_count_messages = self.apply_quick_filters(count_messages);
+                self.total_count = filtered_count_messages.len();
             }
             
             if self.selected_index >= self.messages.len() && !self.messages.is_empty() {
@@ -588,6 +592,82 @@ impl MessageListState {
     
     pub fn get_quick_filter_state(&self, index: usize) -> bool {
         self.quick_filter_states.get(index).copied().unwrap_or(false)
+    }
+    
+    // 應用快速過濾器過濾訊息
+    pub fn apply_quick_filters(&self, messages: Vec<Message>) -> Vec<Message> {
+        // 檢查是否有任何過濾器被啟用
+        let has_active_filters = self.quick_filter_states.iter().any(|&state| state);
+        
+        messages.into_iter().filter(|message| {
+            if has_active_filters {
+                // 如果有過濾器啟用，只顯示匹配啟用過濾器的訊息
+                self.message_matches_any_active_filter(message)
+            } else {
+                // 如果所有過濾器都停用，隱藏所有匹配這些關鍵字的訊息
+                !self.message_matches_any_filter(message)
+            }
+        }).collect()
+    }
+    
+    // 檢查訊息是否匹配任何啟用的過濾器
+    fn message_matches_any_active_filter(&self, message: &Message) -> bool {
+        // 預設的過濾器配置（應該從config中獲取，但這裡先硬編碼）
+        let default_filters = [
+            ("INFO", false),   // F1
+            ("WARN", false),   // F2  
+            ("ERROR", false),  // F3
+            ("TRACE", false),  // F4
+            ("DEBUG", false),  // F5
+        ];
+        
+        let content = format!("{} {}", message.topic, message.payload);
+        
+        for (index, &is_enabled) in self.quick_filter_states.iter().enumerate() {
+            if is_enabled && index < default_filters.len() {
+                let (pattern, case_sensitive) = default_filters[index];
+                
+                let matches = if case_sensitive {
+                    content.contains(pattern)
+                } else {
+                    content.to_lowercase().contains(&pattern.to_lowercase())
+                };
+                
+                if matches {
+                    return true;
+                }
+            }
+        }
+        
+        false
+    }
+    
+    // 檢查訊息是否匹配任何過濾器（不管是否啟用）
+    fn message_matches_any_filter(&self, message: &Message) -> bool {
+        // 預設的過濾器配置
+        let default_filters = [
+            ("INFO", false),   // F1
+            ("WARN", false),   // F2  
+            ("ERROR", false),  // F3
+            ("TRACE", false),  // F4
+            ("DEBUG", false),  // F5
+        ];
+        
+        let content = format!("{} {}", message.topic, message.payload);
+        
+        for (pattern, case_sensitive) in &default_filters {
+            let matches = if *case_sensitive {
+                content.contains(pattern)
+            } else {
+                content.to_lowercase().contains(&pattern.to_lowercase())
+            };
+            
+            if matches {
+                return true;
+            }
+        }
+        
+        false
     }
 }
 

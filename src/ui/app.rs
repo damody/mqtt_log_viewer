@@ -716,6 +716,10 @@ impl App {
                     self.message_list_state.toggle_quick_filter(index);
                     tracing::info!("Toggled quick filter {} - new state: {}", 
                                  index, self.message_list_state.get_quick_filter_state(index));
+                    // 重新載入訊息以應用過濾器
+                    if let Err(e) = self.message_list_state.load_messages(&self.repository).await {
+                        tracing::error!("Failed to reload messages after quick filter toggle: {}", e);
+                    }
                 }
             }
             

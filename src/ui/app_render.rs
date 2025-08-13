@@ -581,23 +581,18 @@ impl App {
         Ok(())
     }
     
-    // 檢測訊息是否匹配快速過濾器並返回對應顏色
-    fn get_quick_filter_color(&self, message: &crate::db::Message) -> Option<crossterm::style::Color> {
+    
+    // 根據訊息內容返回對應的顏色
+    fn get_message_color(&self, message: &crate::db::Message) -> Option<crossterm::style::Color> {
         let config = self.get_config();
         if !config.quick_filters.enabled {
             return None;
         }
         
-        let message_state = self.get_message_list_state();
+        let content = format!("{} {}", message.topic, message.payload);
         
-        for (index, filter) in config.quick_filters.filters.iter().enumerate() {
-            // 檢查過濾器是否啟用且快捷鍵狀態為開啟
-            if !filter.enabled || !message_state.get_quick_filter_state(index) {
-                continue;
-            }
-            
-            // 檢查訊息是否匹配過濾器模式
-            let content = format!("{} {}", message.topic, message.payload);
+        // 檢查每個過濾器的模式並返回對應顏色
+        for filter in &config.quick_filters.filters {
             let matches = if filter.case_sensitive {
                 content.contains(&filter.pattern)
             } else {
@@ -692,15 +687,16 @@ impl App {
                         msg.payload.clone()
                     };
                     
-                    // 應用快速過濾器顏色
-                    if let Some(color) = self.get_quick_filter_color(msg) {
-                        stdout.queue(SetForegroundColor(color))?;
+                    // 檢查並應用快速過濾器顏色
+                    let color = self.get_message_color(msg);
+                    if let Some(c) = color {
+                        stdout.queue(SetForegroundColor(c))?;
                     }
                     
                     stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
                     
-                    // 如果有顏色變更，重置顏色
-                    if self.get_quick_filter_color(msg).is_some() {
+                    // 重置顏色
+                    if color.is_some() {
                         stdout.queue(ResetColor)?;
                     }
                 }
