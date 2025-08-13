@@ -195,8 +195,8 @@ impl TopicListView {
         stdout.queue(Print("│ "))?;
         
         let header = format!(
-            "{:<12} │ {:<18} │ {:<6} │ {:<25}",
-            "Last Message", "Topic", "Count", "Latest Payload"
+            "{:>5} │ {:<12} │ {:<18} │ {:<6} │ {:<25}",
+            "No.", "Last Message", "Topic", "Count", "Latest Payload"
         );
         let padded_header = format!("{:<width$}", header, width = terminal_width.saturating_sub(3) as usize);
         stdout.queue(Print(&padded_header))?;
@@ -259,15 +259,15 @@ impl TopicListView {
                         // 如果正在等待刪除確認，修改顯示的內容
                         if state.delete_confirmation {
                             tracing::info!("Displaying delete confirmation prompt for selected topic: {}", topic.topic);
-                            Self::render_topic_row_with_confirmation(&mut stdout, topic, terminal_width)?;
+                            Self::render_topic_row_with_confirmation(&mut stdout, topic, terminal_width, topic_index + 1)?;
                         } else {
                             tracing::info!("No delete confirmation for selected topic: {}", topic.topic);
-                            Self::render_topic_row_with_border(&mut stdout, topic, terminal_width)?;
+                            Self::render_topic_row_with_border(&mut stdout, topic, terminal_width, topic_index + 1)?;
                         }
                         
                         stdout.queue(ResetColor)?;
                     } else {
-                        Self::render_topic_row_with_border(&mut stdout, topic, terminal_width)?;
+                        Self::render_topic_row_with_border(&mut stdout, topic, terminal_width, topic_index + 1)?;
                     }
                     
                     stdout.queue(Print("│"))?;
@@ -330,11 +330,15 @@ impl TopicListView {
     fn render_topic_row_with_confirmation<W: Write>(
         writer: &mut W,
         topic: &TopicStat,
-        terminal_width: u16
+        terminal_width: u16,
+        sequence_number: usize
     ) -> Result<()> {
+        // Show sequence number first
+        writer.queue(Print(&format!(" {:>5} │ ", sequence_number)))?;
+        
         // Show confirmation prompt instead of normal row content
         let confirmation_msg = format!("刪除 \"{}\"? 再按一次Delete確認刪除", topic.topic);
-        let max_width = terminal_width.saturating_sub(3) as usize;
+        let max_width = terminal_width.saturating_sub(11) as usize; // 3 for borders + 8 for "No." column
         
         let padded_msg = if confirmation_msg.len() > max_width {
             format!("{}", &confirmation_msg[..max_width])
@@ -352,7 +356,8 @@ impl TopicListView {
     fn render_topic_row_with_border<W: Write>(
         writer: &mut W,
         topic: &TopicStat,
-        terminal_width: u16
+        terminal_width: u16,
+        sequence_number: usize
     ) -> Result<()> {
         // Format timestamp
         let time_str = topic.last_message_time.format("%H:%M:%S").to_string();
@@ -401,7 +406,8 @@ impl TopicListView {
         };
         
         let line = format!(
-            " {:<12} │ {:<18} │ {:<6} │ {:<25}",
+            " {:>5} │ {:<12} │ {:<18} │ {:<6} │ {:<25}",
+            sequence_number,
             time_str,
             topic_name,
             count_str,
