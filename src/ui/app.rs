@@ -24,6 +24,7 @@ pub enum AppEvent {
     Delete,
     Paste(String),
     Space,  // 空白鍵事件
+    QuickFilter(usize),  // F1-F5快速過濾器
 }
 
 impl From<KeyEvent> for AppEvent {
@@ -34,10 +35,15 @@ impl From<KeyEvent> for AppEvent {
         }
         
         match key_event.code {
-            KeyCode::F(5) => AppEvent::Refresh,
+            KeyCode::F(1) => AppEvent::QuickFilter(0),  // F1-F5快速過濾器
+            KeyCode::F(2) => AppEvent::QuickFilter(1),
+            KeyCode::F(3) => AppEvent::QuickFilter(2),
+            KeyCode::F(4) => AppEvent::QuickFilter(3),
+            KeyCode::F(5) => AppEvent::QuickFilter(4),
+            KeyCode::F(6) => AppEvent::Refresh,
             KeyCode::Char('/') => AppEvent::Filter,
-            KeyCode::F(2) => AppEvent::JsonToggle,
-            KeyCode::F(1) => AppEvent::Help,
+            KeyCode::F(7) => AppEvent::JsonToggle,
+            KeyCode::F(8) => AppEvent::Help,
             KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::ALT) => {
                 println!("Alt+C detected, generating Copy event");
                 tracing::info!("Alt+C key combination detected, generating Copy event");
@@ -413,14 +419,47 @@ impl App {
                     self.render()?;
                 }
                 
-                // 檢測 Ctrl+C (需要同時檢測兩個鍵)
-                unsafe {
-                    if (GetAsyncKeyState(0x11) & (0x8000u16 as i16) != 0) && (GetAsyncKeyState(67) & (0x8000u16 as i16) != 0) {
-                        std::fs::write("debug_key.txt", "Ctrl+C detected via WinAPI!").ok();
-                        tracing::info!("Ctrl+C detected via Windows API");
-                        break;
+                // 檢測 F1-F5 快速過濾器（只在MessageList狀態下）
+                if self.state == AppState::MessageList {
+                    if self.is_key_just_pressed(0x70) { // VK_F1
+                        tracing::info!("F1 key detected via Windows API - Quick Filter 0");
+                        if self.handle_event(AppEvent::QuickFilter(0)).await? {
+                            break;
+                        }
+                        self.render()?;
+                    }
+                    if self.is_key_just_pressed(0x71) { // VK_F2
+                        tracing::info!("F2 key detected via Windows API - Quick Filter 1");
+                        if self.handle_event(AppEvent::QuickFilter(1)).await? {
+                            break;
+                        }
+                        self.render()?;
+                    }
+                    if self.is_key_just_pressed(0x72) { // VK_F3
+                        tracing::info!("F3 key detected via Windows API - Quick Filter 2");
+                        if self.handle_event(AppEvent::QuickFilter(2)).await? {
+                            break;
+                        }
+                        self.render()?;
+                    }
+                    if self.is_key_just_pressed(0x73) { // VK_F4
+                        tracing::info!("F4 key detected via Windows API - Quick Filter 3");
+                        if self.handle_event(AppEvent::QuickFilter(3)).await? {
+                            break;
+                        }
+                        self.render()?;
+                    }
+                    if self.is_key_just_pressed(0x74) { // VK_F5
+                        tracing::info!("F5 key detected via Windows API - Quick Filter 4");
+                        if self.handle_event(AppEvent::QuickFilter(4)).await? {
+                            break;
+                        }
+                        self.render()?;
                     }
                 }
+                
+                // 移除 Ctrl+C 檢測，避免誤觸關閉程式
+                // 使用者可以使用 ESC 或 'q' 鍵來退出程式
             }
             
             // Handle crossterm events (for character input and resize)
@@ -597,14 +636,8 @@ impl App {
                     self.render()?;
                 }
                 
-                // 檢測 Ctrl+C (需要同時檢測兩個鍵)
-                unsafe {
-                    if (GetAsyncKeyState(0x11) & (0x8000u16 as i16) != 0) && (GetAsyncKeyState(67) & (0x8000u16 as i16) != 0) {
-                        std::fs::write("debug_key.txt", "Ctrl+C detected via WinAPI!").ok();
-                        tracing::info!("Ctrl+C detected via Windows API");
-                        break;
-                    }
-                }
+                // 移除 Ctrl+C 檢測，避免誤觸關閉程式
+                // 使用者可以使用 ESC 或 'q' 鍵來退出程式
             }
             
             // Handle crossterm events (for character input and resize)
@@ -674,6 +707,15 @@ impl App {
                     self.filter_state.is_editing = false;
                 } else {
                     self.navigate_forward().await?;
+                }
+            }
+            
+            AppEvent::QuickFilter(index) => {
+                // 快速過濾器只在MessageList狀態下生效
+                if self.state == AppState::MessageList {
+                    self.message_list_state.toggle_quick_filter(index);
+                    tracing::info!("Toggled quick filter {} - new state: {}", 
+                                 index, self.message_list_state.get_quick_filter_state(index));
                 }
             }
             
@@ -1858,6 +1900,10 @@ impl App {
     // Public getter methods for render module
     pub fn get_state(&self) -> AppState {
         self.state
+    }
+    
+    pub fn get_config(&self) -> &Config {
+        &self.config
     }
     
     pub fn get_terminal_size(&self) -> (u16, u16) {

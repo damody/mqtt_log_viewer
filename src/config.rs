@@ -8,6 +8,7 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub ui: UiConfig,
     pub performance: PerformanceConfig,
+    pub quick_filters: QuickFiltersConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -42,6 +43,22 @@ pub struct PerformanceConfig {
     pub batch_size: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QuickFiltersConfig {
+    pub enabled: bool,
+    pub filters: Vec<QuickFilter>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QuickFilter {
+    pub name: String,
+    pub pattern: String,
+    pub color: String,
+    pub hotkey: String,
+    pub enabled: bool,
+    pub case_sensitive: bool,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -68,6 +85,51 @@ impl Default for Config {
                 max_memory_mb: 100,
                 cache_size: 1000,
                 batch_size: 100,
+            },
+            quick_filters: QuickFiltersConfig {
+                enabled: true,
+                filters: vec![
+                    QuickFilter {
+                        name: "INFO".to_string(),
+                        pattern: "INFO".to_string(),
+                        color: "light_green".to_string(),
+                        hotkey: "F1".to_string(),
+                        enabled: true,
+                        case_sensitive: false,
+                    },
+                    QuickFilter {
+                        name: "WARN".to_string(),
+                        pattern: "WARN".to_string(),
+                        color: "yellow".to_string(),
+                        hotkey: "F2".to_string(),
+                        enabled: true,
+                        case_sensitive: false,
+                    },
+                    QuickFilter {
+                        name: "ERROR".to_string(),
+                        pattern: "ERROR".to_string(),
+                        color: "red".to_string(),
+                        hotkey: "F3".to_string(),
+                        enabled: true,
+                        case_sensitive: false,
+                    },
+                    QuickFilter {
+                        name: "TRACE".to_string(),
+                        pattern: "TRACE".to_string(),
+                        color: "dark_grey".to_string(),
+                        hotkey: "F4".to_string(),
+                        enabled: true,
+                        case_sensitive: false,
+                    },
+                    QuickFilter {
+                        name: "DEBUG".to_string(),
+                        pattern: "DEBUG".to_string(),
+                        color: "cyan".to_string(),
+                        hotkey: "F5".to_string(),
+                        enabled: true,
+                        case_sensitive: false,
+                    },
+                ],
             },
         }
     }

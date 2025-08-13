@@ -217,10 +217,76 @@ impl App {
         let status_start_row = terminal_height.saturating_sub(2);
         self.render_message_list_status(&mut stdout, status_start_row)?;
         
-        // Render help line
+        // Render help line with quick filter status
         stdout.queue(MoveTo(0, status_start_row + 1))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
-        stdout.queue(Print("[←]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page [F1]help"))?;
+        
+        // 先顯示基本操作說明
+        let help_text = "[←]back [Tab]focus [Enter]view [↑↓]navigate [PgUp/PgDn]page";
+        stdout.queue(Print(help_text))?;
+        
+        // 計算快速過濾器狀態的位置（右對齊）
+        let config = self.get_config();
+        if config.quick_filters.enabled && !config.quick_filters.filters.is_empty() {
+            let message_state = self.get_message_list_state();
+            let mut filter_status_parts = Vec::new();
+            
+            for (index, filter) in config.quick_filters.filters.iter().enumerate() {
+                if index < 5 { // 只顯示F1-F5
+                    let status_symbol = if message_state.get_quick_filter_state(index) { "✓" } else { "✗" };
+                    let status_text = format!("[F{}:{} {}]", index + 1, filter.name, status_symbol);
+                    filter_status_parts.push((status_text, filter.color.as_str(), message_state.get_quick_filter_state(index)));
+                }
+            }
+            
+            // 計算所有狀態文字的總長度
+            let total_filter_len: usize = filter_status_parts.iter()
+                .map(|(text, _, _)| text.len() + 1) // +1 for space
+                .sum();
+            
+            if total_filter_len > 0 {
+                // 計算右對齊位置
+                let help_len = help_text.len();
+                let available_space = terminal_width.saturating_sub(help_len + total_filter_len + 3); // +3 for " | "
+                
+                if available_space > 0 {
+                    stdout.queue(Print(&format!("{:<width$}", "", width = available_space)))?;
+                    stdout.queue(Print(" | "))?;
+                    
+                    // 顯示每個過濾器狀態，使用對應顏色
+                    for (i, (status_text, color_name, is_enabled)) in filter_status_parts.iter().enumerate() {
+                        if i > 0 {
+                            stdout.queue(Print(" "))?;
+                        }
+                        
+                        // 根據狀態和顏色設置顯示顏色
+                        if *is_enabled {
+                            // 啟用時使用過濾器對應的顏色
+                            let color = match *color_name {
+                                "red" => crossterm::style::Color::Red,
+                                "green" => crossterm::style::Color::Green,
+                                "light_green" => crossterm::style::Color::DarkGreen,
+                                "yellow" => crossterm::style::Color::Yellow,
+                                "blue" => crossterm::style::Color::Blue,
+                                "cyan" => crossterm::style::Color::Cyan,
+                                "magenta" => crossterm::style::Color::Magenta,
+                                "white" => crossterm::style::Color::White,
+                                "dark_grey" => crossterm::style::Color::DarkGrey,
+                                "grey" => crossterm::style::Color::Grey,
+                                _ => crossterm::style::Color::White,
+                            };
+                            stdout.queue(SetForegroundColor(color))?;
+                        } else {
+                            // 停用時使用暗灰色
+                            stdout.queue(SetForegroundColor(crossterm::style::Color::DarkGrey))?;
+                        }
+                        
+                        stdout.queue(Print(status_text))?;
+                        stdout.queue(ResetColor)?;
+                    }
+                }
+            }
+        }
         
         // Position cursor for input if editing
         if let Some((col, row)) = self.get_message_list_cursor_position() {
@@ -515,6 +581,50 @@ impl App {
         Ok(())
     }
     
+    // 檢測訊息是否匹配快速過濾器並返回對應顏色
+    fn get_quick_filter_color(&self, message: &crate::db::Message) -> Option<crossterm::style::Color> {
+        let config = self.get_config();
+        if !config.quick_filters.enabled {
+            return None;
+        }
+        
+        let message_state = self.get_message_list_state();
+        
+        for (index, filter) in config.quick_filters.filters.iter().enumerate() {
+            // 檢查過濾器是否啟用且快捷鍵狀態為開啟
+            if !filter.enabled || !message_state.get_quick_filter_state(index) {
+                continue;
+            }
+            
+            // 檢查訊息是否匹配過濾器模式
+            let content = format!("{} {}", message.topic, message.payload);
+            let matches = if filter.case_sensitive {
+                content.contains(&filter.pattern)
+            } else {
+                content.to_lowercase().contains(&filter.pattern.to_lowercase())
+            };
+            
+            if matches {
+                // 根據顏色名稱返回對應的crossterm顏色
+                return match filter.color.as_str() {
+                    "red" => Some(crossterm::style::Color::Red),
+                    "green" => Some(crossterm::style::Color::Green),
+                    "light_green" => Some(crossterm::style::Color::DarkGreen),
+                    "yellow" => Some(crossterm::style::Color::Yellow),
+                    "blue" => Some(crossterm::style::Color::Blue),
+                    "cyan" => Some(crossterm::style::Color::Cyan),
+                    "magenta" => Some(crossterm::style::Color::Magenta),
+                    "white" => Some(crossterm::style::Color::White),
+                    "dark_grey" => Some(crossterm::style::Color::DarkGrey),
+                    "grey" => Some(crossterm::style::Color::Grey),
+                    _ => None,
+                };
+            }
+        }
+        
+        None
+    }
+    
     pub fn render_message_list_content(&self, stdout: &mut std::io::Stdout, terminal_width: usize, 
                                   content_start_row: u16, available_height: u16) -> Result<()> {
         let message_state = self.get_message_list_state();
@@ -581,7 +691,17 @@ impl App {
                         msg.payload.clone()
                     };
                     
+                    // 應用快速過濾器顏色
+                    if let Some(color) = self.get_quick_filter_color(msg) {
+                        stdout.queue(SetForegroundColor(color))?;
+                    }
+                    
                     stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
+                    
+                    // 如果有顏色變更，重置顏色
+                    if self.get_quick_filter_color(msg).is_some() {
+                        stdout.queue(ResetColor)?;
+                    }
                 }
                 
                 if i as usize == selected_index {

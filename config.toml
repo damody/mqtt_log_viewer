@@ -19,3 +19,46 @@ enable_json_highlight = true
 max_memory_mb = 100
 cache_size = 1000
 batch_size = 100
+
+[quick_filters]
+enabled = true
+
+[[quick_filters.filters]]
+name = "INFO"
+pattern = "INFO"
+color = "light_green"
+hotkey = "F1"
+enabled = true
+case_sensitive = false
+
+[[quick_filters.filters]]
+name = "WARN"
+pattern = "WARN"
+color = "yellow"
+hotkey = "F2"
+enabled = true
+case_sensitive = false
+
+[[quick_filters.filters]]
+name = "ERROR"
+pattern = "ERROR"
+color = "red"
+hotkey = "F3"
+enabled = true
+case_sensitive = false
+
+[[quick_filters.filters]]
+name = "TRACE"
+pattern = "TRACE"
+color = "dark_grey"
+hotkey = "F4"
+enabled = true
+case_sensitive = false
+
+[[quick_filters.filters]]
+name = "DEBUG"
+pattern = "DEBUG"
+color = "cyan"
+hotkey = "F5"
+enabled = true
+case_sensitive = false

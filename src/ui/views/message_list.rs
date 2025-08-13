@@ -40,6 +40,7 @@ pub struct MessageListState {
     pub time_edit_mode: bool,  // 是否處於時間編輯模式
     pub time_edit_position: TimeEditPosition,  // 當前編輯的時間部分
     pub temp_datetime: Option<DateTime<Local>>,  // 暫存的時間值
+    pub quick_filter_states: Vec<bool>,  // F1-F5快速過濾器的開關狀態
 }
 
 impl MessageListState {
@@ -69,6 +70,7 @@ impl MessageListState {
             time_edit_mode: false,
             time_edit_position: TimeEditPosition::Day,
             temp_datetime: None,
+            quick_filter_states: vec![true; 5],  // 預設全部開啟（F1-F5）
         }
     }
     
@@ -575,6 +577,17 @@ impl MessageListState {
                 _ => {}
             }
         }
+    }
+    
+    // 快速過濾器相關方法
+    pub fn toggle_quick_filter(&mut self, index: usize) {
+        if index < self.quick_filter_states.len() {
+            self.quick_filter_states[index] = !self.quick_filter_states[index];
+        }
+    }
+    
+    pub fn get_quick_filter_state(&self, index: usize) -> bool {
+        self.quick_filter_states.get(index).copied().unwrap_or(false)
     }
 }
 
