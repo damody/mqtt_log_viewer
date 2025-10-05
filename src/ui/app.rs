@@ -211,6 +211,15 @@ impl App {
         // Set initial help text
         StatusBar::set_help_text_for_view(&mut app.status_bar_state, &ViewType::TopicList);
         
+        // 初始化快速過濾器狀態
+        if app.config.quick_filters.enabled {
+            app.status_bar_state.quick_filter_states = app.config.quick_filters.filters
+                .iter()
+                .take(5) // 只取前5個
+                .map(|f| (f.name.clone(), f.color.clone(), false))
+                .collect();
+        }
+        
         Ok(app)
     }
     
@@ -419,8 +428,8 @@ impl App {
                     self.render()?;
                 }
                 
-                // 檢測 F1-F5 快速過濾器（只在MessageList狀態下）
-                if self.state == AppState::MessageList {
+                // 檢測 F1-F5 快速過濾器（在MessageList和TopicList狀態下）
+                if self.state == AppState::MessageList || self.state == AppState::TopicList {
                     if self.is_key_just_pressed(0x70) { // VK_F1
                         tracing::info!("F1 key detected via Windows API - Quick Filter 0");
                         if self.handle_event(AppEvent::QuickFilter(0)).await? {
@@ -711,14 +720,39 @@ impl App {
             }
             
             AppEvent::QuickFilter(index) => {
-                // 快速過濾器只在MessageList狀態下生效
+                // 快速過濾器只在MessageList和TopicList狀態下生效
                 if self.state == AppState::MessageList {
+                    // 記錄切換前是否處於即時刷新狀態
+                    let was_in_auto_update_mode = self.should_auto_update_messages();
+                    
                     self.message_list_state.toggle_quick_filter(index);
-                    tracing::info!("Toggled quick filter {} - new state: {}", 
-                                 index, self.message_list_state.get_quick_filter_state(index));
+                    tracing::info!("Toggled quick filter {} - new state: {}, was_in_auto_update_mode: {}", 
+                                 index, self.message_list_state.get_quick_filter_state(index), was_in_auto_update_mode);
+                    
                     // 重新載入訊息以應用過濾器
-                    if let Err(e) = self.message_list_state.load_messages(&self.repository).await {
+                    if let Err(e) = self.message_list_state.reload_after_filter_change(&self.repository).await {
                         tracing::error!("Failed to reload messages after quick filter toggle: {}", e);
+                    }
+                    
+                    // 如果之前處於即時刷新狀態，切換過濾器後自動focus到最新訊息
+                    if was_in_auto_update_mode && !self.message_list_state.messages.is_empty() {
+                        self.message_list_state.selected_index = 0; // 最新訊息在index 0
+                        self.message_list_state.page = 1; // 回到第一頁（頁數從1開始）
+                        tracing::info!("Auto-focused to latest message after filter toggle");
+                    }
+                    
+                    // 更新狀態欄的快速過濾器狀態
+                    if self.config.quick_filters.enabled && index < self.status_bar_state.quick_filter_states.len() {
+                        self.status_bar_state.quick_filter_states[index].2 = self.message_list_state.get_quick_filter_state(index);
+                    }
+                } else if self.state == AppState::TopicList {
+                    // 在TopicList狀態下也允許切換快速過濾器
+                    self.message_list_state.toggle_quick_filter(index);
+                    tracing::info!("Toggled quick filter {} in TopicList - new state: {}", 
+                                 index, self.message_list_state.get_quick_filter_state(index));
+                    // 更新狀態欄的快速過濾器狀態
+                    if self.config.quick_filters.enabled && index < self.status_bar_state.quick_filter_states.len() {
+                        self.status_bar_state.quick_filter_states[index].2 = self.message_list_state.get_quick_filter_state(index);
                     }
                 }
             }
@@ -965,6 +999,10 @@ impl App {
                 if matches!(self.message_list_state.get_focus(), crate::ui::views::message_list::FocusTarget::MessageList) {
                     tracing::debug!("End key pressed in message list - moving to last page last item");
                     self.message_list_state.move_to_bottom(&self.repository).await?;
+                    
+                    // 當用戶主動跳到最新訊息時，立即刷新以確保數據是最新的
+                    tracing::debug!("User moved to latest message - refreshing data");
+                    self.message_list_state.load_messages(&self.repository).await?;
                 }
             }
             AppEvent::Delete => {
@@ -1638,6 +1676,18 @@ impl App {
                         &mut self.status_bar_state, 
                         &ViewType::MessageList(selected_topic.topic.clone())
                     );
+                    
+                    // 同步快速過濾器狀態到狀態欄
+                    if self.config.quick_filters.enabled {
+                        for index in 0..self.status_bar_state.quick_filter_states.len().min(5) {
+                            if index < self.config.quick_filters.filters.len() {
+                                self.status_bar_state.quick_filter_states[index].0 = self.config.quick_filters.filters[index].name.clone();
+                                self.status_bar_state.quick_filter_states[index].1 = self.config.quick_filters.filters[index].color.clone();
+                                self.status_bar_state.quick_filter_states[index].2 = self.message_list_state.get_quick_filter_state(index);
+                            }
+                        }
+                    }
+                    
                     // 立即渲染第二層UI
                     info!("About to call render() for MessageList state");
                     self.render()?;
@@ -1658,6 +1708,33 @@ impl App {
         Ok(())
     }
     
+    // 判斷是否應該自動更新MessageList中的訊息
+    fn should_auto_update_messages(&self) -> bool {
+        let state = &self.message_list_state;
+        
+        // 如果沒有訊息，則可以更新
+        if state.messages.is_empty() {
+            return true;
+        }
+        
+        // 由於訊息按timestamp DESC排序，index 0 是最新訊息
+        let is_on_newest_message = state.selected_index == 0;
+        
+        // 檢查當前是否在最新頁（第一頁包含最新訊息）
+        let is_on_latest_page = state.page == 1;
+        
+        // 只有當用戶在最新頁面且focus在最新訊息（index 0）時才自動更新
+        let should_update = is_on_latest_page && is_on_newest_message;
+        
+        tracing::debug!(
+            "should_auto_update_messages: page={}, selected={}, total={}, is_latest_page={}, is_newest_msg={}, should_update={}",
+            state.page, state.selected_index, state.messages.len(), 
+            is_on_latest_page, is_on_newest_message, should_update
+        );
+        
+        should_update
+    }
+
     async fn refresh_data(&mut self) -> Result<()> {
         match self.state {
             AppState::TopicList => {
@@ -1675,10 +1752,14 @@ impl App {
                 }
             }
             AppState::MessageList => {
-                // 重新載入當前topic的訊息
-                tracing::debug!("refresh_data called in MessageList state");
-                self.message_list_state.load_messages(&self.repository).await?;
-                tracing::debug!("MessageList messages refreshed successfully");
+                // 只有當用戶focus在最新訊息時才自動更新
+                if self.should_auto_update_messages() {
+                    tracing::debug!("refresh_data called in MessageList state - auto update");
+                    self.message_list_state.load_messages(&self.repository).await?;
+                    tracing::debug!("MessageList messages refreshed successfully");
+                } else {
+                    tracing::debug!("MessageList auto-update skipped - user browsing history");
+                }
             }
             _ => {}
         }
@@ -1811,7 +1892,8 @@ impl App {
         prev.total_topics == current.total_topics &&
         prev.total_messages == current.total_messages &&
         prev.last_update == current.last_update &&
-        prev.help_text == current.help_text
+        prev.help_text == current.help_text &&
+        prev.quick_filter_states == current.quick_filter_states
     }
     
     #[cfg(windows)]

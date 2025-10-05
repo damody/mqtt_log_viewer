@@ -425,12 +425,12 @@ impl App {
             
             // 渲染遊標前的文字
             if cursor_pos > 0 {
-                let before_cursor = &input_text[..cursor_pos.min(input_text.len())];
-                stdout.queue(Print(before_cursor))?;
+                let before_cursor: String = input_text.chars().take(cursor_pos).collect();
+                stdout.queue(Print(&before_cursor))?;
             }
             
             // 渲染遊標位置的字元（反白顯示）
-            if cursor_pos < input_text.len() {
+            if cursor_pos < input_text.chars().count() {
                 let cursor_char = input_text.chars().nth(cursor_pos).unwrap_or(' ');
                 stdout.queue(crossterm::style::SetBackgroundColor(crossterm::style::Color::White))?;
                 stdout.queue(SetForegroundColor(crossterm::style::Color::Black))?;
@@ -439,9 +439,9 @@ impl App {
                 stdout.queue(SetForegroundColor(crossterm::style::Color::Cyan))?;
                 
                 // 渲染遊標後的文字
-                if cursor_pos + 1 < input_text.len() {
-                    let after_cursor = &input_text[cursor_pos + 1..];
-                    stdout.queue(Print(after_cursor))?;
+                if cursor_pos + 1 < input_text.chars().count() {
+                    let after_cursor: String = input_text.chars().skip(cursor_pos + 1).collect();
+                    stdout.queue(Print(&after_cursor))?;
                 }
             } else {
                 // 遊標在文字末端，顯示一個反白的空格
@@ -654,8 +654,9 @@ impl App {
                     // Show delete confirmation prompt instead of normal content
                     let confirmation_msg = format!("刪除此訊息? 再按一次Delete確認刪除");
                     let max_width = terminal_width.saturating_sub(20);
-                    let padded_msg = if confirmation_msg.len() > max_width {
-                        format!("{}", &confirmation_msg[..max_width])
+                    let padded_msg = if confirmation_msg.chars().count() > max_width {
+                        let truncated: String = confirmation_msg.chars().take(max_width).collect();
+                        format!("{}", truncated)
                     } else {
                         format!("{:<width$}", confirmation_msg, width = max_width)
                     };
@@ -667,7 +668,15 @@ impl App {
                     // Normal message display
                     // 計算流水號（考慮分頁，越新的訊息數字越大）
                     // 總數 - ((當前頁-1) * 每頁數量 + 當前索引)
-                    let sequence_number = message_state.total_count - ((message_state.page - 1) * message_state.per_page + i as usize);
+                    let page_offset = message_state.page.saturating_sub(1).saturating_mul(message_state.per_page);
+                    let offset = page_offset.saturating_add(i as usize);
+                    let sequence_number = if offset < message_state.total_count {
+                        message_state.total_count - offset
+                    } else {
+                        error!("流水號計算錯誤: offset ({}) >= total_count ({}), page={}, per_page={}, i={}, page_offset={}", 
+                               offset, message_state.total_count, message_state.page, message_state.per_page, i, page_offset);
+                        1 // 防止下溢，使用最小值1
+                    };
                     
                     // 顯示流水號
                     stdout.queue(Print(&format!("{:>5} │ ", sequence_number)))?;
@@ -679,12 +688,17 @@ impl App {
                     stdout.queue(Print(" │ "))?;
                     
                     // Truncate payload if too long
-                    // 調整最大寬度以配合新增的流水號欄位 (原本20 + 7 for "12345 │ ")
-                    let max_payload_width = terminal_width.saturating_sub(27);
-                    let payload_display = if msg.payload.len() > max_payload_width {
-                        format!("{}...", &msg.payload[..max_payload_width.saturating_sub(3)])
+                    // 精確計算寬度：
+                    // │ (2) + >> (3) + 4616 (5) +  │  (3) + 22:54:15 (10) +  │  (3) + payload + │ (1)
+                    // = 2 + 3 + 5 + 3 + 10 + 3 + payload + 1 = 27 + payload
+                    let max_payload_width = terminal_width.saturating_sub(20);
+                    let payload_display = if msg.payload.chars().count() > max_payload_width {
+                        // 使用 Unicode 安全的字符截斷
+                        let truncate_len = max_payload_width.saturating_sub(3);
+                        let truncated: String = msg.payload.chars().take(truncate_len).collect();
+                        format!("{}...", truncated)
                     } else {
-                        msg.payload.clone()
+                        format!("{:<width$}", msg.payload, width = max_payload_width)
                     };
                     
                     // 檢查並應用快速過濾器顏色
@@ -693,7 +707,7 @@ impl App {
                         stdout.queue(SetForegroundColor(c))?;
                     }
                     
-                    stdout.queue(Print(&format!("{:<width$}", payload_display, width = max_payload_width)))?;
+                    stdout.queue(Print(&payload_display))?;
                     
                     // 重置顏色
                     if color.is_some() {
@@ -835,10 +849,12 @@ impl App {
                 let line_number_space = line_number_width + 1; // 行號 + 一個空格
                 let max_content_width = terminal_width.saturating_sub(4 + line_number_space); // "│ " + 行號空間 + " │"
                 
-                if line.len() > max_content_width {
-                    let truncated = format!("{}...", &line[..max_content_width.saturating_sub(3)]);
+                if line.chars().count() > max_content_width {
+                    let truncate_len = max_content_width.saturating_sub(3);
+                    let truncated_str: String = line.chars().take(truncate_len).collect();
+                    let truncated = format!("{}...", truncated_str);
                     stdout.queue(Print(&truncated))?;
-                    let padding = max_content_width.saturating_sub(truncated.len());
+                    let padding = max_content_width.saturating_sub(truncated.chars().count());
                     stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
                 } else {
                     stdout.queue(Print(line))?;

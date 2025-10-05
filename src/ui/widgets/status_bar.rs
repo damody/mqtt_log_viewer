@@ -15,6 +15,7 @@ pub struct StatusBarState {
     pub last_update: Option<chrono::DateTime<chrono::Utc>>,
     pub current_view: ViewType,
     pub help_text: String,
+    pub quick_filter_states: Vec<(String, String, bool)>, // (name, color, enabled)
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,7 @@ impl Default for StatusBarState {
             last_update: None,
             current_view: ViewType::TopicList,
             help_text: "[/]filter [Enter]select [↑↓]navigate [F5]refresh [F1]help".to_string(),
+            quick_filter_states: Vec::new(),
         }
     }
 }
@@ -86,7 +88,7 @@ impl StatusBar {
         });
         
         let help_line_changed = prev_state.map_or(true, |prev| {
-            prev.help_text != state.help_text
+            prev.help_text != state.help_text || prev.quick_filter_states != state.quick_filter_states
         });
         
         // Update connection status in the filter bar (row 1)
@@ -113,6 +115,64 @@ impl StatusBar {
             stdout.queue(cursor::MoveTo(0, row + 1))?;
             stdout.queue(Clear(ClearType::CurrentLine))?;
             stdout.queue(Print(&state.help_text))?;
+            
+            // 在幫助文字後面顯示快速過濾器狀態
+            if !state.quick_filter_states.is_empty() {
+                // 獲取終端寬度
+                let (terminal_width, _) = crossterm::terminal::size()?;
+                
+                // 計算所有過濾器狀態文字的總長度
+                let mut filter_status_parts = Vec::new();
+                for (index, (name, color, enabled)) in state.quick_filter_states.iter().enumerate() {
+                    if index < 5 { // 只顯示F1-F5
+                        let status_symbol = if *enabled { "✓" } else { "✗" };
+                        let status_text = format!("[F{}:{} {}]", index + 1, name, status_symbol);
+                        filter_status_parts.push((status_text, color.clone(), *enabled));
+                    }
+                }
+                
+                let total_filter_len: usize = filter_status_parts.iter()
+                    .map(|(text, _, _)| text.len() + 1) // +1 for space
+                    .sum();
+                
+                if total_filter_len > 0 {
+                    // 計算右對齊位置
+                    let help_len = state.help_text.len();
+                    let available_space = terminal_width.saturating_sub(help_len as u16 + total_filter_len as u16 + 3); // +3 for " | "
+                    
+                    if available_space > 0 {
+                        stdout.queue(Print(&format!("{:<width$}", "", width = available_space as usize)))?;
+                        stdout.queue(Print(" | "))?;
+                        
+                        // 顯示每個過濾器狀態，使用對應顏色
+                        for (i, (status_text, color_name, is_enabled)) in filter_status_parts.iter().enumerate() {
+                            if i > 0 {
+                                stdout.queue(Print(" "))?;
+                            }
+                            
+                            // 根據顏色名稱設定顏色
+                            let color = match color_name.as_str() {
+                                "Green" => Color::Green,
+                                "Yellow" => Color::Yellow,
+                                "Red" => Color::Red,
+                                "Blue" => Color::Blue,
+                                "Cyan" => Color::Cyan,
+                                "Magenta" => Color::Magenta,
+                                _ => Color::White,
+                            };
+                            
+                            if *is_enabled {
+                                stdout.queue(SetForegroundColor(color))?;
+                            } else {
+                                stdout.queue(SetForegroundColor(Color::DarkGrey))?;
+                            }
+                            
+                            stdout.queue(Print(status_text))?;
+                            stdout.queue(ResetColor)?;
+                        }
+                    }
+                }
+            }
         }
         
         stdout.flush()?;

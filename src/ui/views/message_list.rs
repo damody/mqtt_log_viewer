@@ -144,18 +144,8 @@ impl MessageListState {
             // 更新過濾條件，包含時間過濾
             self.update_filter_from_inputs();
             
-            let mut filter = self.filter.clone();
-            filter.limit = Some(self.per_page as i64);
-            filter.offset = Some(((self.page - 1) * self.per_page) as i64);
-            
-            tracing::info!("load_messages filter: {:?}", filter);
-            let mut all_messages = repo.get_messages_by_topic(&topic, &filter).await?;
-            
-            // 應用快速過濾器過濾
-            self.messages = self.apply_quick_filters(all_messages);
-            
-            // Get total count for this topic with same filters (but without limit/offset)
-            let count_filter = FilterCriteria {
+            // 先取出所有符合時間和payload過濾條件的訊息（不設limit/offset）
+            let base_filter = FilterCriteria {
                 topic_regex: self.filter.topic_regex.clone(),
                 payload_regex: self.filter.payload_regex.clone(),
                 start_time: self.filter.start_time.clone(),
@@ -163,12 +153,42 @@ impl MessageListState {
                 limit: None,
                 offset: None,
             };
-            tracing::info!("load_messages count_filter: {:?}", count_filter);
-            if let Ok(count_messages) = repo.get_messages_by_topic(&topic, &count_filter).await {
-                let filtered_count_messages = self.apply_quick_filters(count_messages);
-                self.total_count = filtered_count_messages.len();
+            
+            tracing::info!("load_messages base_filter: {:?}", base_filter);
+            let all_messages = repo.get_messages_by_topic(&topic, &base_filter).await?;
+            
+            // 應用快速過濾器過濾
+            let filtered_messages = self.apply_quick_filters(all_messages);
+            self.total_count = filtered_messages.len();
+            
+            // 計算當前頁的訊息（確保頁數至少為1）
+            let safe_page = self.page.max(1);
+            let start_index = (safe_page - 1) * self.per_page;
+            let end_index = (start_index + self.per_page).min(filtered_messages.len());
+            
+            // 如果page為0或無效，記錄錯誤
+            if self.page < 1 {
+                tracing::error!("Invalid page number: {}, using page 1 instead", self.page);
+                self.page = 1;
             }
             
+            if start_index < filtered_messages.len() {
+                self.messages = filtered_messages[start_index..end_index].to_vec();
+            } else {
+                self.messages = Vec::new();
+                // 如果當前頁沒有訊息，調整到最後一頁
+                if !filtered_messages.is_empty() {
+                    let last_page = ((filtered_messages.len() - 1) / self.per_page) + 1;
+                    if self.page > last_page {
+                        self.page = last_page;
+                        let start_index = (self.page - 1) * self.per_page;
+                        let end_index = (start_index + self.per_page).min(filtered_messages.len());
+                        self.messages = filtered_messages[start_index..end_index].to_vec();
+                    }
+                }
+            }
+            
+            // 調整選中項目索引
             if self.selected_index >= self.messages.len() && !self.messages.is_empty() {
                 self.selected_index = self.messages.len() - 1;
             }
@@ -590,6 +610,27 @@ impl MessageListState {
         }
     }
     
+    // 當快速過濾器狀態改變時，重新加載訊息並調整頁面
+    pub async fn reload_after_filter_change(&mut self, repo: &MessageRepository) -> anyhow::Result<()> {
+        // 保存當前選中的訊息ID，以便重載後嘗試保持選中相同訊息
+        let selected_message_id = self.get_selected_message().and_then(|msg| msg.id);
+        
+        // 重新加載訊息
+        self.load_messages(repo).await?;
+        
+        // 嘗試恢復選中的訊息
+        if let Some(target_id) = selected_message_id {
+            if let Some(index) = self.messages.iter().position(|msg| msg.id == Some(target_id)) {
+                self.selected_index = index;
+            } else if !self.messages.is_empty() {
+                // 如果原選中的訊息被過濾掉了，選中第一個
+                self.selected_index = 0;
+            }
+        }
+        
+        Ok(())
+    }
+    
     pub fn get_quick_filter_state(&self, index: usize) -> bool {
         self.quick_filter_states.get(index).copied().unwrap_or(false)
     }
@@ -600,32 +641,40 @@ impl MessageListState {
         let has_active_filters = self.quick_filter_states.iter().any(|&state| state);
         
         messages.into_iter().filter(|message| {
-            if has_active_filters {
-                // 如果有過濾器啟用，只顯示匹配啟用過濾器的訊息
-                self.message_matches_any_active_filter(message)
+            // 檢查訊息是否包含任何log關鍵字
+            let is_log_message = self.message_matches_any_filter(message);
+            
+            if !is_log_message {
+                // 不是log訊息，始終顯示
+                true
             } else {
-                // 如果所有過濾器都停用，隱藏所有匹配這些關鍵字的訊息
-                !self.message_matches_any_filter(message)
+                // 是log訊息，根據過濾器狀態決定
+                if has_active_filters {
+                    // 有過濾器啟用，只顯示匹配啟用過濾器的log訊息
+                    self.message_matches_any_active_filter(message)
+                } else {
+                    // 所有過濾器都停用，隱藏所有log訊息
+                    false
+                }
             }
         }).collect()
     }
     
     // 檢查訊息是否匹配任何啟用的過濾器
     fn message_matches_any_active_filter(&self, message: &Message) -> bool {
-        // 預設的過濾器配置（應該從config中獲取，但這裡先硬編碼）
-        let default_filters = [
-            ("INFO", false),   // F1
-            ("WARN", false),   // F2  
-            ("ERROR", false),  // F3
-            ("TRACE", false),  // F4
-            ("DEBUG", false),  // F5
-        ];
-        
         let content = format!("{} {}", message.topic, message.payload);
         
         for (index, &is_enabled) in self.quick_filter_states.iter().enumerate() {
-            if is_enabled && index < default_filters.len() {
-                let (pattern, case_sensitive) = default_filters[index];
+            if is_enabled {
+                // 使用預設過濾器模式（應該通過參數傳入config，但現在先硬編碼）
+                let (pattern, case_sensitive) = match index {
+                    0 => ("INFO", false),
+                    1 => ("WARN", false),
+                    2 => ("ERROR", false),
+                    3 => ("TRACE", false),
+                    4 => ("DEBUG", false),
+                    _ => continue,
+                };
                 
                 let matches = if case_sensitive {
                     content.contains(pattern)
@@ -644,18 +693,17 @@ impl MessageListState {
     
     // 檢查訊息是否匹配任何過濾器（不管是否啟用）
     fn message_matches_any_filter(&self, message: &Message) -> bool {
-        // 預設的過濾器配置
-        let default_filters = [
-            ("INFO", false),   // F1
-            ("WARN", false),   // F2  
-            ("ERROR", false),  // F3
-            ("TRACE", false),  // F4
-            ("DEBUG", false),  // F5
-        ];
-        
         let content = format!("{} {}", message.topic, message.payload);
         
-        for (pattern, case_sensitive) in &default_filters {
+        let patterns = [
+            ("INFO", false),
+            ("WARN", false),
+            ("ERROR", false),
+            ("TRACE", false),
+            ("DEBUG", false),
+        ];
+        
+        for (pattern, case_sensitive) in &patterns {
             let matches = if *case_sensitive {
                 content.contains(pattern)
             } else {

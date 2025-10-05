@@ -4,7 +4,6 @@
       "Bash(mkdir:*)",
       "Bash(cargo check:*)",
       "Bash(cargo:*)",
-      "Bash(rm:*)",
       "Bash(mosquitto_pub:*)",
       "Bash(mosquitto:*)",
       "Bash(echo $PATH)",
@@ -51,8 +50,11 @@
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/time_edit\" -m '{\"\"test\"\": \"\"from field debug\"\", \"\"timestamp\"\": \"\"2025-08-11T00:00:00Z\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/field_width\" -m '{\"\"test\"\": \"\"testing wider field display\"\", \"\"timestamp\"\": \"\"2025-08-12T00:25:00Z\"\"}')",
       "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/second_layer_time\" -m '{\"\"test\"\": \"\"second layer time edit test\"\", \"\"timestamp\"\": \"\"2025-08-12T16:15:00Z\"\"}')",
-      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/cursor_test\" -m '{\"\"test\"\": \"\"cursor display test\"\", \"\"timestamp\"\": \"\"2025-08-12T16:30:00Z\"\"}')"
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/cursor_test\" -m '{\"\"test\"\": \"\"cursor display test\"\", \"\"timestamp\"\": \"\"2025-08-12T16:30:00Z\"\"}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"test/new_topic\" -m '{\"\"test\"\": \"\"new topic with sequence\"\", \"\"value\"\": 999}')",
+      "Bash(\"/c/Program Files/mosquitto/mosquitto_pub.exe\" -h 127.0.0.1 -t \"app/logs\" -m '{\"\"level\"\": \"\"INFO\"\", \"\"message\"\": \"\"Application started successfully\"\", \"\"timestamp\"\": \"\"2025-08-13T00:50:00Z\"\"}')"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   }
 }
