@@ -47,6 +47,7 @@ toml = "0.9.5"
 uuid = { version = "1.0", features = ["v4", "fast-rng"] }
 lazy_static = "1.4"
 crossbeam-channel = "0.5"
+copypasta = "0.10"
 
 # Windows API for direct key detection
 [target.'cfg(windows)'.dependencies]

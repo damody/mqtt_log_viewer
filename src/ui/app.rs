@@ -44,6 +44,12 @@ impl From<KeyEvent> for AppEvent {
             KeyCode::Char('/') => AppEvent::Filter,
             KeyCode::F(7) => AppEvent::JsonToggle,
             KeyCode::F(8) => AppEvent::Help,
+            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+C 會根據當前狀態決定行為：
+                // - TopicList: 退出程式
+                // - MessageList/PayloadDetail: 複製 payload
+                AppEvent::Copy
+            },
             KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::ALT) => {
                 println!("Alt+C detected, generating Copy event");
                 tracing::info!("Alt+C key combination detected, generating Copy event");
@@ -173,9 +179,12 @@ pub struct App {
     // Windows API key state tracking
     #[cfg(windows)]
     last_key_state: std::collections::HashMap<i32, bool>,
-    
+
     // Key repeat functionality for MessageList navigation
     key_repeat_state: KeyRepeatState,
+
+    // Clipboard context (needs to be kept alive for Wayland)
+    clipboard_ctx: Option<copypasta::ClipboardContext>,
 }
 
 impl App {
@@ -206,8 +215,21 @@ impl App {
             #[cfg(windows)]
             last_key_state: std::collections::HashMap::new(),
             key_repeat_state: KeyRepeatState::default(),
+            clipboard_ctx: {
+                use copypasta::ClipboardProvider;
+                match copypasta::ClipboardContext::new() {
+                    Ok(ctx) => {
+                        tracing::info!("Clipboard context initialized successfully");
+                        Some(ctx)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize clipboard context: {}", e);
+                        None
+                    }
+                }
+            },
         };
-        
+
         // Set initial help text
         StatusBar::set_help_text_for_view(&mut app.status_bar_state, &ViewType::TopicList);
         
@@ -225,22 +247,30 @@ impl App {
     
     pub async fn run(&mut self) -> Result<()> {
         info!("Starting MQTT Log Viewer application");
-        
+
         // Initialize terminal
         enable_raw_mode()?;
         let mut stdout = stdout();
         stdout.execute(Hide)?;
         stdout.execute(Clear(ClearType::All))?;
         stdout.execute(MoveTo(0, 0))?;
-        
-        // Enable keyboard enhancement flags for better key detection
-        let _ = stdout.queue(PushKeyboardEnhancementFlags(
+
+        // Try to enable keyboard enhancement flags for better key detection
+        // This may fail on some terminals/environments, so we ignore errors
+        match stdout.queue(PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                 | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                 | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-        ));
-        let _ = stdout.flush();
-        
+        )) {
+            Ok(_) => {
+                let _ = stdout.flush();
+                tracing::debug!("Keyboard enhancement flags enabled");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to enable keyboard enhancement flags (continuing anyway): {}", e);
+            }
+        }
+
         let result = self.main_loop().await;
         
         // Cleanup terminal
@@ -256,22 +286,30 @@ impl App {
         connection_status: std::sync::Arc<std::sync::Mutex<bool>>
     ) -> Result<()> {
         info!("Starting MQTT Log Viewer application with connection monitoring");
-        
+
         // Initialize terminal
         enable_raw_mode()?;
         let mut stdout = stdout();
         stdout.execute(Hide)?;
         stdout.execute(Clear(ClearType::All))?;
         stdout.execute(MoveTo(0, 0))?;
-        
-        // Enable keyboard enhancement flags for better key detection
-        let _ = stdout.queue(PushKeyboardEnhancementFlags(
+
+        // Try to enable keyboard enhancement flags for better key detection
+        // This may fail on some terminals/environments, so we ignore errors
+        match stdout.queue(PushKeyboardEnhancementFlags(
             KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                 | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                 | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-        ));
-        let _ = stdout.flush();
-        
+        )) {
+            Ok(_) => {
+                let _ = stdout.flush();
+                tracing::debug!("Keyboard enhancement flags enabled");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to enable keyboard enhancement flags (continuing anyway): {}", e);
+            }
+        }
+
         let result = self.main_loop_with_status(connection_status).await;
         
         // Cleanup terminal
@@ -470,23 +508,44 @@ impl App {
                 // 移除 Ctrl+C 檢測，避免誤觸關閉程式
                 // 使用者可以使用 ESC 或 'q' 鍵來退出程式
             }
-            
-            // Handle crossterm events (for character input and resize)
+
+            // Handle crossterm events
+            // On Linux/non-Windows, handle all keyboard events via crossterm
+            // On Windows, only handle character input and Backspace via crossterm (navigation keys use WinAPI)
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
                     Event::Key(key_event) => {
                         tracing::debug!("Raw key event detected: {:?}", key_event);
-                        // 處理字符輸入事件和Backspace事件
                         let app_event = AppEvent::from(key_event);
                         tracing::debug!("Converted to AppEvent: {:?}", app_event);
-                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Copy) {
-                            tracing::debug!("Input/Backspace/Tab/Copy event detected: {:?}", app_event);
-                            if self.handle_event(app_event).await? {
-                                break;
+
+                        #[cfg(not(windows))]
+                        {
+                            // On Linux/non-Windows: handle all key events via crossterm
+                            if !matches!(app_event, AppEvent::Input('\0')) {
+                                tracing::debug!("Processing event: {:?}", app_event);
+                                if self.handle_event(app_event).await? {
+                                    break;
+                                }
+                                self.render()?;
+                            } else {
+                                tracing::debug!("Ignored null input event");
                             }
-                            self.render()?;
-                        } else {
-                            tracing::debug!("Non-input event ignored: {:?}", app_event);
+                        }
+
+                        #[cfg(windows)]
+                        {
+                            // On Windows: only handle character input, Backspace, and Copy via crossterm
+                            // (navigation keys are handled by WinAPI above)
+                            if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Copy) {
+                                tracing::debug!("Input/Backspace/Copy event detected: {:?}", app_event);
+                                if self.handle_event(app_event).await? {
+                                    break;
+                                }
+                                self.render()?;
+                            } else {
+                                tracing::debug!("Non-input event ignored (handled by WinAPI): {:?}", app_event);
+                            }
                         }
                     }
                     Event::Resize(width, height) => {
@@ -500,11 +559,11 @@ impl App {
                 }
             }
         }
-        
+
         info!("Application shutting down");
         Ok(())
     }
-    
+
     async fn main_loop(&mut self) -> Result<()> {
         let mut last_refresh = Instant::now();
         
@@ -648,23 +707,44 @@ impl App {
                 // 移除 Ctrl+C 檢測，避免誤觸關閉程式
                 // 使用者可以使用 ESC 或 'q' 鍵來退出程式
             }
-            
-            // Handle crossterm events (for character input and resize)
+
+            // Handle crossterm events
+            // On Linux/non-Windows, handle all keyboard events via crossterm
+            // On Windows, only handle character input and Backspace via crossterm (navigation keys use WinAPI)
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
                     Event::Key(key_event) => {
                         tracing::debug!("Raw key event detected: {:?}", key_event);
-                        // 處理字符輸入事件和Backspace事件
                         let app_event = AppEvent::from(key_event);
                         tracing::debug!("Converted to AppEvent: {:?}", app_event);
-                        if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Copy) {
-                            tracing::debug!("Input/Backspace/Tab/Copy event detected: {:?}", app_event);
-                            if self.handle_event(app_event).await? {
-                                break;
+
+                        #[cfg(not(windows))]
+                        {
+                            // On Linux/non-Windows: handle all key events via crossterm
+                            if !matches!(app_event, AppEvent::Input('\0')) {
+                                tracing::debug!("Processing event: {:?}", app_event);
+                                if self.handle_event(app_event).await? {
+                                    break;
+                                }
+                                self.render()?;
+                            } else {
+                                tracing::debug!("Ignored null input event");
                             }
-                            self.render()?;
-                        } else {
-                            tracing::debug!("Non-input event ignored: {:?}", app_event);
+                        }
+
+                        #[cfg(windows)]
+                        {
+                            // On Windows: only handle character input, Backspace, and Copy via crossterm
+                            // (navigation keys are handled by WinAPI above)
+                            if matches!(app_event, AppEvent::Input(c) if c != '\0') || matches!(app_event, AppEvent::Backspace) || matches!(app_event, AppEvent::Copy) {
+                                tracing::debug!("Input/Backspace/Copy event detected: {:?}", app_event);
+                                if self.handle_event(app_event).await? {
+                                    break;
+                                }
+                                self.render()?;
+                            } else {
+                                tracing::debug!("Non-input event ignored (handled by WinAPI): {:?}", app_event);
+                            }
                         }
                     }
                     Event::Resize(width, height) => {
@@ -678,8 +758,8 @@ impl App {
                 }
             }
         }
-        
-        info!("Application shutting down");
+
+        info!("Main loop exiting");
         Ok(())
     }
     
@@ -692,18 +772,59 @@ impl App {
         }
         match event {
             AppEvent::Quit => return Ok(true),
-            
+
+            AppEvent::Copy => {
+                // Ctrl+C/Alt+C 的行為根據當前狀態決定：
+                // - TopicList: 不做任何事（不退出）
+                // - MessageList: 複製當前選中訊息的 payload
+                // - PayloadDetail: 由 handle_payload_detail_event 處理（複製選中的內容）
+                match self.state {
+                    AppState::TopicList | AppState::Help | AppState::Quit => {
+                        // 在 TopicList/Help/Quit 按 Ctrl+C 不做任何事
+                        tracing::info!("Ctrl+C pressed in {:?} - ignoring", self.state);
+                    }
+                    AppState::MessageList => {
+                        // 在 MessageList 複製當前選中訊息的 payload
+                        if let Some(message) = self.message_list_state.get_selected_message() {
+                            let payload = message.payload.clone();
+                            let payload_len = payload.len();
+                            tracing::info!("Copying payload from MessageList");
+                            match self.copy_to_clipboard(&payload) {
+                                Ok(()) => {
+                                    tracing::info!("Successfully copied payload to clipboard ({} chars)", payload_len);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to copy payload to clipboard: {}", e);
+                                }
+                            }
+                        } else {
+                            tracing::warn!("No message selected in MessageList for copy");
+                        }
+                    }
+                    AppState::PayloadDetail => {
+                        // PayloadDetail 的 Copy 行為由 handle_payload_detail_event 處理
+                        // 繼續向下傳遞到狀態特定的處理器
+                        tracing::debug!("Routing Copy event to handle_payload_detail_event");
+                        self.handle_payload_detail_event(event).await?;
+                    }
+                }
+            }
+
             AppEvent::Refresh => {
                 self.refresh_data().await?;
             }
-            
+
             AppEvent::Filter => {
                 self.toggle_filter_mode();
             }
-            
+
             AppEvent::Escape => {
                 if self.filter_state.is_editing {
                     self.filter_state.is_editing = false;
+                } else if self.state == AppState::TopicList {
+                    // 在 TopicList 狀態按 ESC/Ctrl+C 退出程式
+                    tracing::info!("User requested exit from TopicList");
+                    return Ok(true); // 返回 true 表示退出程式
                 } else {
                     self.navigate_back()?;
                 }
@@ -1395,10 +1516,11 @@ impl App {
                     PayloadDetailSelection::Topic => {
                         tracing::info!("Attempting to copy topic");
                         if let Some(message) = self.get_selected_message() {
-                            tracing::info!("Found message with topic: {}", message.topic);
-                            match self.copy_to_clipboard(&message.topic) {
+                            let topic = message.topic.clone();
+                            tracing::info!("Found message with topic: {}", topic);
+                            match self.copy_to_clipboard(&topic) {
                                 Ok(()) => {
-                                    tracing::info!("Successfully copied topic to clipboard: {}", message.topic);
+                                    tracing::info!("Successfully copied topic to clipboard: {}", topic);
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to copy topic to clipboard: {}", e);
@@ -1411,10 +1533,12 @@ impl App {
                     PayloadDetailSelection::Payload => {
                         tracing::info!("Attempting to copy payload");
                         if let Some(message) = self.get_selected_message() {
-                            tracing::info!("Found message with payload length: {} chars", message.payload.len());
-                            match self.copy_to_clipboard(&message.payload) {
+                            let payload = message.payload.clone();
+                            let payload_len = payload.len();
+                            tracing::info!("Found message with payload length: {} chars", payload_len);
+                            match self.copy_to_clipboard(&payload) {
                                 Ok(()) => {
-                                    tracing::info!("Successfully copied payload to clipboard ({} chars)", message.payload.len());
+                                    tracing::info!("Successfully copied payload to clipboard ({} chars)", payload_len);
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to copy payload to clipboard: {}", e);
@@ -1427,16 +1551,19 @@ impl App {
                     PayloadDetailSelection::FormattedJson => {
                         tracing::info!("Attempting to copy formatted JSON");
                         if let Some(message) = self.get_selected_message() {
-                            tracing::info!("Found message with payload length: {} chars", message.payload.len());
+                            let payload = message.payload.clone();
+                            let payload_len = payload.len();
+                            tracing::info!("Found message with payload length: {} chars", payload_len);
                             // Try to parse and format as JSON
-                            match serde_json::from_str::<serde_json::Value>(&message.payload) {
+                            match serde_json::from_str::<serde_json::Value>(&payload) {
                                 Ok(json_value) => {
                                     match serde_json::to_string_pretty(&json_value) {
                                         Ok(formatted_json) => {
-                                            tracing::info!("Successfully parsed payload as JSON, formatted length: {} chars", formatted_json.len());
+                                            let formatted_len = formatted_json.len();
+                                            tracing::info!("Successfully parsed payload as JSON, formatted length: {} chars", formatted_len);
                                             match self.copy_to_clipboard(&formatted_json) {
                                                 Ok(()) => {
-                                                    tracing::info!("Successfully copied formatted JSON to clipboard ({} chars)", formatted_json.len());
+                                                    tracing::info!("Successfully copied formatted JSON to clipboard ({} chars)", formatted_len);
                                                 }
                                                 Err(e) => {
                                                     tracing::error!("Failed to copy formatted JSON to clipboard: {}", e);
@@ -1445,9 +1572,9 @@ impl App {
                                         }
                                         Err(e) => {
                                             tracing::warn!("Failed to format JSON: {}, copying original payload", e);
-                                            match self.copy_to_clipboard(&message.payload) {
+                                            match self.copy_to_clipboard(&payload) {
                                                 Ok(()) => {
-                                                    tracing::info!("Successfully copied original payload to clipboard ({} chars)", message.payload.len());
+                                                    tracing::info!("Successfully copied original payload to clipboard ({} chars)", payload_len);
                                                 }
                                                 Err(e) => {
                                                     tracing::error!("Failed to copy original payload to clipboard: {}", e);
@@ -1458,9 +1585,9 @@ impl App {
                                 }
                                 Err(e) => {
                                     tracing::warn!("Payload is not valid JSON: {}, copying original payload", e);
-                                    match self.copy_to_clipboard(&message.payload) {
+                                    match self.copy_to_clipboard(&payload) {
                                         Ok(()) => {
-                                            tracing::info!("Successfully copied original payload to clipboard ({} chars)", message.payload.len());
+                                            tracing::info!("Successfully copied original payload to clipboard ({} chars)", payload_len);
                                         }
                                         Err(e) => {
                                             tracing::error!("Failed to copy original payload to clipboard: {}", e);
@@ -2155,86 +2282,31 @@ impl App {
         }
     }
     
-    pub fn copy_to_clipboard(&self, text: &str) -> Result<()> {
+    pub fn copy_to_clipboard(&mut self, text: &str) -> Result<()> {
+        use copypasta::ClipboardProvider;
+
         tracing::info!("copy_to_clipboard called with text length: {} chars", text.len());
         tracing::debug!("Text to copy: {}", text);
-        
-        #[cfg(windows)]
-        {
-            use std::ffi::OsString;
-            use std::os::windows::ffi::{OsStringExt, OsStrExt};
-            use winapi::um::winuser::{OpenClipboard, SetClipboardData, EmptyClipboard, CloseClipboard};
-            use winapi::um::winbase::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-            use winapi::um::winuser::CF_UNICODETEXT;
-            
-            tracing::info!("Starting Windows clipboard operation");
-            unsafe {
-                tracing::debug!("Opening clipboard...");
-                if OpenClipboard(std::ptr::null_mut()) == 0 {
-                    tracing::error!("Failed to open clipboard");
-                    return Err(anyhow::anyhow!("Failed to open clipboard"));
+
+        // Always save to clipboard.txt first
+        std::fs::write("clipboard.txt", text)?;
+        tracing::info!("Content saved to clipboard.txt ({} chars)", text.len());
+
+        // Try to also copy to system clipboard using the persistent context
+        if let Some(ref mut ctx) = self.clipboard_ctx {
+            match ctx.set_contents(text.to_owned()) {
+                Ok(()) => {
+                    tracing::info!("Successfully copied {} chars to system clipboard", text.len());
                 }
-                tracing::debug!("Clipboard opened successfully");
-                
-                tracing::debug!("Emptying clipboard...");
-                if EmptyClipboard() == 0 {
-                    CloseClipboard();
-                    tracing::error!("Failed to empty clipboard");
-                    return Err(anyhow::anyhow!("Failed to empty clipboard"));
+                Err(e) => {
+                    tracing::warn!("Failed to set system clipboard contents: {}", e);
                 }
-                tracing::debug!("Clipboard emptied successfully");
-                
-                // Convert text to wide string
-                tracing::debug!("Converting text to wide string...");
-                let wide_text: Vec<u16> = OsString::from(text).encode_wide().chain(std::iter::once(0)).collect();
-                let len = wide_text.len() * 2; // 2 bytes per wide char
-                tracing::debug!("Wide string length: {} chars, {} bytes", wide_text.len(), len);
-                
-                tracing::debug!("Allocating clipboard memory...");
-                let h_mem = GlobalAlloc(GMEM_MOVEABLE, len);
-                if h_mem.is_null() {
-                    CloseClipboard();
-                    tracing::error!("Failed to allocate clipboard memory");
-                    return Err(anyhow::anyhow!("Failed to allocate clipboard memory"));
-                }
-                tracing::debug!("Memory allocated successfully");
-                
-                tracing::debug!("Locking memory...");
-                let mem_ptr = GlobalLock(h_mem);
-                if mem_ptr.is_null() {
-                    CloseClipboard();
-                    tracing::error!("Failed to lock clipboard memory");
-                    return Err(anyhow::anyhow!("Failed to lock clipboard memory"));
-                }
-                tracing::debug!("Memory locked successfully");
-                
-                tracing::debug!("Copying data to clipboard memory...");
-                std::ptr::copy_nonoverlapping(wide_text.as_ptr(), mem_ptr as *mut u16, wide_text.len());
-                GlobalUnlock(h_mem);
-                tracing::debug!("Data copied and memory unlocked");
-                
-                tracing::debug!("Setting clipboard data...");
-                if SetClipboardData(CF_UNICODETEXT, h_mem).is_null() {
-                    CloseClipboard();
-                    tracing::error!("Failed to set clipboard data");
-                    return Err(anyhow::anyhow!("Failed to set clipboard data"));
-                }
-                tracing::debug!("Clipboard data set successfully");
-                
-                tracing::debug!("Closing clipboard...");
-                CloseClipboard();
-                tracing::info!("Clipboard operation completed successfully");
-                Ok(())
             }
+        } else {
+            tracing::warn!("Clipboard context not available");
         }
-        
-        #[cfg(not(windows))]
-        {
-            // For non-Windows platforms, just log for now
-            // TODO: Implement clipboard support for other platforms
-            tracing::info!("Would copy to clipboard: {}", text);
-            Ok(())
-        }
+
+        Ok(())
     }
     
 }
