@@ -12,6 +12,13 @@ use crate::ui::widgets::{FilterBar, StatusBar};
 use crate::ui::views::{TopicListView};
 use crate::ui::app::{App, AppState};
 
+// 用於自動換行的結構體
+#[derive(Debug, Clone)]
+struct WrappedLine {
+    content: String,
+    original_line_number: usize,
+}
+
 // Rendering implementation for App
 impl App {
     pub fn render(&mut self) -> Result<()> {
@@ -371,6 +378,13 @@ impl App {
         
         // Render payload content
         let payload_lines = self.format_payload_content(&selected_message.payload);
+        
+        // 計算換行後的行數
+        let line_number_width = 4;
+        let line_number_space = line_number_width + 1;
+        let max_content_width = terminal_width.saturating_sub(4 + line_number_space);
+        let wrapped_lines = self.wrap_payload_lines(&payload_lines, max_content_width);
+        
         self.render_payload_detail_content(&mut stdout, terminal_width, content_start_row, available_height, &payload_lines)?;
         
         // Render bottom border
@@ -382,7 +396,7 @@ impl App {
         
         // Render status lines
         let status_start_row = terminal_height.saturating_sub(status_rows);
-        self.render_payload_detail_status(&mut stdout, status_start_row, &selected_message, &payload_lines, available_height)?;
+        self.render_payload_detail_status(&mut stdout, status_start_row, &selected_message, &payload_lines, &wrapped_lines, available_height)?;
         
         // Render help line
         stdout.queue(MoveTo(0, status_start_row + 1))?;
@@ -811,23 +825,23 @@ impl App {
     
     pub fn render_payload_detail_content(&mut self, stdout: &mut std::io::Stdout, terminal_width: usize,
                                    content_start_row: u16, available_height: u16, payload_lines: &[String]) -> Result<()> {
+        // 計算內容可用寬度：終端寬度 - "│ " - 行號 - " " - " │"
+        let line_number_width = 4; // 固定行號寬度，足夠顯示大部分情況
+        let line_number_space = line_number_width + 1; // 行號 + 一個空格
+        let max_content_width = terminal_width.saturating_sub(4 + line_number_space); // "│ " + 行號空間 + " │"
+        
+        // 將原始行分割成可顯示的行，考慮自動換行
+        let wrapped_lines = self.wrap_payload_lines(payload_lines, max_content_width);
+        
         let payload_scroll_offset = self.get_payload_detail_scroll_offset();
         
         // Ensure scroll offset doesn't exceed content
-        let max_scroll = payload_lines.len().saturating_sub(available_height as usize);
+        let max_scroll = wrapped_lines.len().saturating_sub(available_height as usize);
         if payload_scroll_offset > max_scroll {
             self.set_payload_detail_scroll_offset(max_scroll);
         }
         
         let current_scroll_offset = self.get_payload_detail_scroll_offset();
-        
-        // 計算最大行號的寬度（用於對齊）
-        let total_lines = payload_lines.len();
-        let line_number_width = if total_lines == 0 {
-            1
-        } else {
-            ((total_lines as f64).log10().floor() as usize) + 1
-        };
         
         // Render payload content with scroll offset and line numbers
         for i in 0..available_height {
@@ -838,29 +852,17 @@ impl App {
             stdout.queue(Print("│ "))?;
             
             let line_index = (i as usize) + current_scroll_offset;
-            if let Some(line) = payload_lines.get(line_index) {
-                // 顯示行號（從1開始）
-                let line_number = line_index + 1;
+            if let Some(wrapped_line) = wrapped_lines.get(line_index) {
+                // 顯示行號（從1開始，基於原始行號）
+                let original_line_number = wrapped_line.original_line_number;
                 stdout.queue(SetForegroundColor(crossterm::style::Color::DarkGrey))?;
-                stdout.queue(Print(&format!("{:>width$} ", line_number, width = line_number_width)))?;
+                stdout.queue(Print(&format!("{:>width$} ", original_line_number, width = line_number_width)))?;
                 stdout.queue(ResetColor)?;
                 
-                // 計算內容可用寬度：終端寬度 - "│ " - 行號 - " " - " │"
-                let line_number_space = line_number_width + 1; // 行號 + 一個空格
-                let max_content_width = terminal_width.saturating_sub(4 + line_number_space); // "│ " + 行號空間 + " │"
-                
-                if line.chars().count() > max_content_width {
-                    let truncate_len = max_content_width.saturating_sub(3);
-                    let truncated_str: String = line.chars().take(truncate_len).collect();
-                    let truncated = format!("{}...", truncated_str);
-                    stdout.queue(Print(&truncated))?;
-                    let padding = max_content_width.saturating_sub(truncated.chars().count());
-                    stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-                } else {
-                    stdout.queue(Print(line))?;
-                    let padding = max_content_width.saturating_sub(line.len());
-                    stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
-                }
+                // 顯示內容
+                stdout.queue(Print(&wrapped_line.content))?;
+                let padding = max_content_width.saturating_sub(wrapped_line.content.chars().count());
+                stdout.queue(Print(&format!("{:<width$}", "", width = padding)))?;
             } else {
                 // Empty line - 只顯示空白，不顯示行號
                 let padding = terminal_width.saturating_sub(3); // "│ " + "│"
@@ -872,22 +874,101 @@ impl App {
         Ok(())
     }
     
+    // 將原始行分割成可顯示的行，考慮自動換行
+    fn wrap_payload_lines(&self, payload_lines: &[String], max_width: usize) -> Vec<WrappedLine> {
+        let mut wrapped_lines = Vec::new();
+        
+        for (line_index, line) in payload_lines.iter().enumerate() {
+            let original_line_number = line_index + 1;
+            
+            if line.chars().count() <= max_width {
+                // 行不超過最大寬度，直接添加
+                wrapped_lines.push(WrappedLine {
+                    content: line.clone(),
+                    original_line_number,
+                });
+            } else {
+                // 行超過最大寬度，需要分割
+                let mut remaining = line.clone();
+                let mut is_first_wrap = true;
+                
+                while !remaining.is_empty() {
+                    let chars: Vec<char> = remaining.chars().collect();
+                    let mut break_point = max_width;
+                    
+                    // 嘗試在單詞邊界分割（避免在單詞中間分割）
+                    if is_first_wrap {
+                        // 第一行，嘗試在空格處分割
+                        for i in (0..max_width.min(chars.len())).rev() {
+                            if chars[i].is_whitespace() {
+                                break_point = i;
+                                break;
+                            }
+                        }
+                    } else {
+                        // 後續行，在最大寬度處分割
+                        break_point = max_width.min(chars.len());
+                    }
+                    
+                    let (current_part, next_part) = if break_point < chars.len() {
+                        let current: String = chars[..break_point].iter().collect();
+                        let next: String = chars[break_point..].iter().collect();
+                        (current, next)
+                    } else {
+                        (remaining, String::new())
+                    };
+                    
+                    // 移除前導空白（除了第一行）
+                    let content = if is_first_wrap {
+                        current_part
+                    } else {
+                        current_part.trim_start().to_string()
+                    };
+                    
+                    wrapped_lines.push(WrappedLine {
+                        content,
+                        original_line_number,
+                    });
+                    
+                    remaining = next_part;
+                    is_first_wrap = false;
+                }
+            }
+        }
+        
+        wrapped_lines
+    }
+    
     pub fn render_payload_detail_status(&self, stdout: &mut std::io::Stdout, status_start_row: u16,
                                    selected_message: &crate::db::Message, payload_lines: &[String],
-                                   available_height: u16) -> Result<()> {
+                                   wrapped_lines: &[WrappedLine], available_height: u16) -> Result<()> {
         stdout.queue(MoveTo(0, status_start_row))?;
         stdout.queue(Clear(crossterm::terminal::ClearType::CurrentLine))?;
         let payload_size = selected_message.payload.len();
-        let line_count = payload_lines.len();
+        let original_line_count = payload_lines.len();
+        let wrapped_line_count = wrapped_lines.len();
         let scroll_offset = self.get_payload_detail_scroll_offset();
-        let scroll_info = if line_count > available_height as usize {
+        
+        // 顯示原始行數和換行後的行數
+        let line_info = if wrapped_line_count > original_line_count {
+            format!(" | Lines: {}-{}/{} (wrapped: {})", 
+                    scroll_offset + 1,
+                    std::cmp::min(scroll_offset + available_height as usize, wrapped_line_count),
+                    original_line_count,
+                    wrapped_line_count)
+        } else {
             format!(" | Lines: {}-{}/{}", 
                     scroll_offset + 1,
-                    std::cmp::min(scroll_offset + available_height as usize, line_count),
-                    line_count)
-        } else {
-            format!(" | Lines: {}", line_count)
+                    std::cmp::min(scroll_offset + available_height as usize, wrapped_line_count),
+                    original_line_count)
         };
+        
+        let scroll_info = if wrapped_line_count > available_height as usize {
+            line_info
+        } else {
+            format!(" | Lines: {}", original_line_count)
+        };
+        
         stdout.queue(Print(format!("Payload: {} bytes{} | Topic: {}", 
                                  payload_size, scroll_info, selected_message.topic)))?;
         Ok(())

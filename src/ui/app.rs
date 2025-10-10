@@ -2214,18 +2214,30 @@ impl App {
     }
     
     pub fn format_payload_content(&self, payload: &str) -> Vec<String> {
-        // Try to parse payload as JSON for formatting
-        match serde_json::from_str::<serde_json::Value>(payload) {
-            Ok(json_value) => {
-                // Format JSON with proper indentation
-                match serde_json::to_string_pretty(&json_value) {
-                    Ok(pretty_json) => pretty_json.lines().map(|line| line.to_string()).collect(),
-                    Err(_) => payload.lines().map(|line| line.to_string()).collect(),
+        match self.payload_detail_selection {
+            PayloadDetailSelection::FormattedJson => {
+                // Try to parse payload as JSON for formatting
+                match serde_json::from_str::<serde_json::Value>(payload) {
+                    Ok(json_value) => {
+                        // Format JSON with proper indentation
+                        match serde_json::to_string_pretty(&json_value) {
+                            Ok(pretty_json) => pretty_json.lines().map(|line| line.to_string()).collect(),
+                            Err(_) => payload.lines().map(|line| line.to_string()).collect(),
+                        }
+                    }
+                    Err(_) => {
+                        // Not JSON, display as plain text
+                        payload.lines().map(|line| line.to_string()).collect()
+                    }
                 }
             }
-            Err(_) => {
-                // Not JSON, display as plain text
+            PayloadDetailSelection::Payload => {
+                // Display raw payload as plain text
                 payload.lines().map(|line| line.to_string()).collect()
+            }
+            PayloadDetailSelection::Topic => {
+                // This shouldn't be called for topic selection, but return empty for safety
+                vec![]
             }
         }
     }
